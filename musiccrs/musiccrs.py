@@ -1,5 +1,6 @@
 """MusicCRS conversational agent."""
-
+import os
+import json
 import ollama
 from dialoguekit.core.annotated_utterance import AnnotatedUtterance
 from dialoguekit.core.dialogue_act import DialogueAct
@@ -9,13 +10,7 @@ from dialoguekit.core.utterance import Utterance
 from dialoguekit.participant.agent import Agent
 from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.platforms import FlaskSocketPlatform
-
-OLLAMA_HOST = "https://ollama.ux.uis.no"
-OLLAMA_MODEL = "llama3.3:70b"
-OLLAMA_API_KEY = "SET YOUR API KEY HERE"
-
-_INTENT_OPTIONS = Intent("OPTIONS")
-
+from config import OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_API_KEY, DB_PATH
 
 class MusicCRS(Agent):
     def __init__(self, use_llm: bool = True):
@@ -31,6 +26,36 @@ class MusicCRS(Agent):
             self._llm = None
 
         self._playlist = []  # Stores the current playlist
+
+    # --- playlist functions ---
+    
+    def add_to_playlist(self, artist_song: str) -> None:
+        # TODO waiting for db logic
+        
+        database = self._load_or_create_db()
+        if artist_song not in database:
+            print(f"'{artist_song}' not found in database.")
+            return
+        song = database[artist_song]
+        if song in self._playlist:
+            print(f"'{song}' is already in the playlist.")
+            return
+        self._playlist.append(database[artist_song])
+        print(f"Added '{song}' to playlist.")
+            
+    def remove_from_playlist(self, song: str) -> None:
+        if song not in self._playlist:
+            print(f"Song '{song}' is not in the playlist.")
+        self._playlist.remove(song)
+        print(f"Removed '{song}' from playlist.")
+        
+    def view_playlist(self) -> list[str]:
+        return self._playlist
+    
+    def clear_playlist(self) -> None:
+        self._playlist.clear()
+
+    # --- Dialogue functions ---
 
     def welcome(self) -> None:
         """Sends the agent's welcome message."""
@@ -131,7 +156,24 @@ class MusicCRS(Agent):
             + "</ol>\n"
         )
 
+    # --- database functions ---
+    
+    def _load_or_create_db(self):
+        # TODO  wait for confirmation email regarding db being folder or a db
+        """Load the database, create if not exist."""
+        # if not os.path.exists(DB_PATH):
+        #     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+        #     # Create an empty database
+        #     with open(DB_PATH, "w") as f:
+        #         json.dump({}, f)
+        #     print(f"Created new database at {DB_PATH}")
+        #     return {}
 
+        # with open(DB_PATH, "r") as f:
+        #     db = json.load(f)
+        # print(f"Loaded database with {len(db)} tracks")
+        # return db
+        ...
 if __name__ == "__main__":
     platform = FlaskSocketPlatform(MusicCRS)
     platform.start()

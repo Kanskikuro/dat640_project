@@ -3,3 +3,5 @@ __pycache__/
 node_modules/
 *.tar
 mpd.v1/
+dialogue_export/
+data/

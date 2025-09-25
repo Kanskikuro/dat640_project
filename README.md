@@ -34,8 +34,13 @@ The [frontend](frontend/) is based on [ChatWidget](https://github.com/iai-group/
 
 Install Node if you don't have it from [here](https://nodejs.org/en/download/).
 
-Then install all necessary packages:
+Start frontend npm environment
 
+``` bash
+docker run -it --rm -v ${PWD}:/app -w /app -p 3000:3000 node:22-alpine sh
+```
+
+Then install all necessary packages:
 ```bash
 frontend/$ npm install
 ```

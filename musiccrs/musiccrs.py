@@ -28,53 +28,61 @@ class MusicCRS(Agent):
             self._llm = None
             
         self._create_db_and_load_mpd()  # Create and load the database if it doesn't exist
-        self._current_playlist = str()  # Initialize what playlist the user is on
-        self._playlists = {}  # Stores the current playlist
+        self._current_playlist: str | None = None  # Name of active playlist
+        # Stores playlists as: name -> list of entries {id:int, artist:str, title:str}
+        self._playlists: dict[str, list[dict]] = {}
 
     # --- playlist functions ---
-    def add_playlist(self, playlist_name: str) -> None:
+    def add_playlist(self, playlist_name: str) -> str:
+        if not playlist_name:
+            return "Please provide a playlist name."
         if playlist_name in self._playlists:
             self._current_playlist = playlist_name
-            print(f"Playlist '{playlist_name}' already exists. Switched to '{playlist_name}'.")
-            return
+            return f"Switched to existing playlist '{playlist_name}'."
         self._playlists[playlist_name] = []
         self._current_playlist = playlist_name
-        print(f"Created and switched to playlist '{playlist_name}'.")
+        return f"Created and switched to playlist '{playlist_name}'."
     
-    def add_song_to_playlist(self, artist_song: str, playlist_name:str) -> None:
-        songs = self.check_song_in_db(artist_song)
-        if not songs:
-            print(f"'{artist_song}' not found in database.")
-            return
-        if artist_song in self._current_playlist:
-            print(f"'{artist_song}' is already in the playlist.")
-            return
-        if playlist_name and len(songs) > 1:
-            # if multiple songs found, the songs are ordered by popularity ()
-            print(f"Multiple songs found for '{artist_song}'. Please specify the playlist to add to.")  
-            return 
-        
-        if playlist_name is None and len(songs) == 1:
-            self._playlists[self._current_playlist].append(artist_song)
-            print(f"Added '{artist_song}' to the '{self._current_playlist}' playlist.")
-        else:
-            self._playlists[playlist_name].append(artist_song)
+    def add_song_to_playlist(self, artist: str, title: str, playlist_name: str | None = None) -> str:
+        if not artist or not title:
+            return "Please provide both artist and title as '[artist]: [title]'."
+        song = self._find_song_in_db(artist, title)
+        if not song:
+            return f"Song not found in database: '{artist}: {title}'."
+        target = playlist_name or self._current_playlist
+        if not target:
+            return "No active playlist. Use '/pl use [name]' to create/select a playlist first."
+        # prevent duplicates by id
+        entries = self._playlists.setdefault(target, [])
+        if any(entry["id"] == song["id"] for entry in entries):
+            return f"Song already in playlist '{target}': {artist} - {title}."
+        entries.append({"id": song["id"], "artist": song["artist"], "title": song["title"]})
+        return f"Added to '{target}': {artist} - {title}."
                  
             
-    def remove_song_from_playlist(self, artist_song: str) -> None:
-        if artist_song not in self._current_playlist:
-            print(f"Song '{artist_song}' is not in the playlist.")
-            return
-            
-        self._current_playlist[self._current_playlist].remove(artist_song)
-        print(f"Removed '{artist_song}' from playlist.")
+    def remove_song_from_playlist(self, artist: str, title: str, playlist_name: str | None = None) -> str:
+        target = playlist_name or self._current_playlist
+        if not target:
+            return "No active playlist. Use '/pl use [name]' first."
+        entries = self._playlists.get(target, [])
+        idx = next((i for i, e in enumerate(entries) if e["artist"].lower() == artist.lower() and e["title"].lower() == title.lower()), None)
+        if idx is None:
+            return f"Song not found in playlist '{target}': {artist} - {title}."
+        removed = entries.pop(idx)
+        return f"Removed from '{target}': {removed['artist']} - {removed['title']}."
         
-    def view_playlist(self, playlist_name) -> list[str]:
-        return self._playlists[playlist_name]
+    def view_playlist(self, playlist_name: str | None = None) -> list[dict]:
+        target = playlist_name or self._current_playlist
+        if not target:
+            return []
+        return self._playlists.get(target, [])
     
-    def clear_playlist(self, playlist_name):
-        if playlist_name in self._playlists:
-            self._playlists[playlist_name] = []
+    def clear_playlist(self, playlist_name: str | None = None) -> str:
+        target = playlist_name or self._current_playlist
+        if not target:
+            return "No active playlist. Use '/pl use [name]' first."
+        self._playlists[target] = []
+        return f"Cleared playlist '{target}'."
 
     # --- Dialogue functions ---
 
@@ -90,7 +98,6 @@ class MusicCRS(Agent):
         """Quits the conversation."""
         utterance = AnnotatedUtterance(
             "It was nice talking to you. Bye",
-            dialogue_acts=[DialogueAct(intent=self.stop_intent)],
             participant=DialogueParticipant.AGENT,
         )
         self._dialogue_connector.register_agent_utterance(utterance)
@@ -103,29 +110,23 @@ class MusicCRS(Agent):
         Args:
             utterance: User utterance.
         """
+        text = (utterance.text or "").strip()
         response = ""
-        dialogue_acts = []
-        if utterance.text.startswith("/info"):
+        if text.startswith("/pl "):
+            response = self._handle_playlist_command(text[4:].strip())
+        elif text.startswith("/info"):
             response = self._info()
-        elif utterance.text.startswith("/ask_llm "):
-            prompt = utterance.text[9:]
+        elif text.startswith("/ask_llm "):
+            prompt = text[9:]
             response = self._ask_llm(prompt)
-        elif utterance.text.startswith("/options"):
+        elif text.startswith("/options"):
             options = [
                 "Play some jazz music",
                 "Recommend me some pop songs",
                 "Create a workout playlist",
             ]
             response = self._options(options)
-            dialogue_acts = [
-                DialogueAct(
-                    intent=_INTENT_OPTIONS,
-                    annotations=[
-                        SlotValueAnnotation("option", option) for option in options
-                    ],
-                )
-            ]
-        elif utterance.text == "/quit":
+        elif text == "/quit":
             self.goodbye()
             return
         else:
@@ -135,9 +136,60 @@ class MusicCRS(Agent):
             AnnotatedUtterance(
                 response,
                 participant=DialogueParticipant.AGENT,
-                dialogue_acts=dialogue_acts,
             )
         )
+
+    # --- Playlist command handling ---
+    def _handle_playlist_command(self, command: str) -> str:
+        # Supported:
+        # /pl use <name>
+        # /pl add <artist>: <title>
+        # /pl remove <artist>: <title>
+        # /pl view [name]
+        # /pl clear [name]
+        parts = command.split(" ", 1)
+        if not parts:
+            return self._pl_help()
+        action = parts[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if action in ("use", "new"):
+            return self.add_playlist(arg)
+        elif action == "add":
+            artist, title = self._parse_song_spec(arg)
+            return self.add_song_to_playlist(artist, title)
+        elif action == "remove":
+            artist, title = self._parse_song_spec(arg)
+            return self.remove_song_from_playlist(artist, title)
+        elif action == "view":
+            name = arg or None
+            items = self.view_playlist(name)
+            if not items:
+                return "Playlist is empty or not selected. Use '/pl use [name]' first."
+            lines = [f"{i+1}. {it['artist']} - {it['title']}" for i, it in enumerate(items)]
+            target = name or (self._current_playlist or "(none)")
+            return "Playlist '" + target + "':\n" + "\n".join(lines)
+        elif action == "clear":
+            name = arg or None
+            return self.clear_playlist(name)
+        else:
+            return self._pl_help()
+
+    def _pl_help(self) -> str:
+        return (
+            "Playlist commands:\n"
+            "- /pl use [name]   (create/switch)\n"
+            "- /pl add [artist]: [title]\n"
+            "- /pl remove [artist]: [title]\n"
+            "- /pl view [name]\n"
+            "- /pl clear [name]"
+        )
+
+    def _parse_song_spec(self, spec: str) -> tuple[str, str]:
+        if ":" not in spec:
+            return "", ""
+        artist, title = spec.split(":", 1)
+        return artist.strip(), title.strip()
 
     # --- Response handlers ---
 
@@ -275,35 +327,23 @@ class MusicCRS(Agent):
         conn.close()
         print("All slices loaded into database successfully.")
 
-    def check_song_in_db(self, artist: str, title: str) -> bool:
-        """Check if a song exists in the database."""
-        if artist is None and title is None:
-            Print( "Artist and title cannot both be None")
-            return []
-        
+    def _find_song_in_db(self, artist: str, title: str) -> dict | None:
+        """Return a single song dict if found exactly (case-insensitive), else None."""
+        if not artist or not title:
+            return None
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-        if title and artist:
-            cursor.execute("SELECT 1 FROM songs WHERE artist=? AND title=?", (artist, title))
-            songs = cursor.fetchall()
-        elif title:
-            cursor.execute("SELECT 1 FROM songs WHERE title=?", (title,)) # What happens when there are multiple songs with the same title?
-            songs = cursor.fetchall()
-            
-            ranked_songs = []
-            for song_id, song_title in songs:
-                # Ranking them by popularity (number of playlists they are in)
-                cursor.execute("SELECT COUNT(DISTINCT playlist_id) FROM playlist_songs WHERE song_id=?", (song_id,))
-                playlist_count = cursor.fetchone()[0]
-                ranked_songs.append((song_id, song_title, playlist_count))
-
-            # Sort by number of playlists, descending
-            songs = ranked_songs.sort(key=lambda x: x[2], reverse=True)
-            
+        cursor.execute(
+            "SELECT id, artist, title FROM songs WHERE artist = ? COLLATE NOCASE AND title = ? COLLATE NOCASE",
+            (artist, title),
+        )
+        row = cursor.fetchone()
         conn.close()
-        return songs
+        if not row:
+            return None
+        sid, sartist, stitle = row
+        return {"id": sid, "artist": sartist, "title": stitle}
         
 if __name__ == "__main__":
     platform = FlaskSocketPlatform(MusicCRS)
-    platform.start()
     platform.start()

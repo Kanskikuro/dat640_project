@@ -7,3 +7,4 @@ dialogue_export/
 data/
 .vscode/
 build/
+musiccrs/.env

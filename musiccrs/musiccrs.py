@@ -43,24 +43,23 @@ class MusicCRS(Agent):
     
     def add_song_to_playlist(self, artist_song: str, playlist_name:str) -> None:
         songs = self.check_song_in_db(artist_song)
-        if songs:
+        if not songs:
             print(f"'{artist_song}' not found in database.")
             return
         if artist_song in self._current_playlist:
             print(f"'{artist_song}' is already in the playlist.")
             return
-        
+        if playlist_name and len(songs) > 1:
+            # if multiple songs found, the songs are ordered by popularity ()
+            print(f"Multiple songs found for '{artist_song}'. Please specify the playlist to add to.")  
+            return 
         
         if playlist_name is None and len(songs) == 1:
             self._playlists[self._current_playlist].append(artist_song)
             print(f"Added '{artist_song}' to the '{self._current_playlist}' playlist.")
         else:
-            self._playlists[self.playlist_name].append(artist_song)
-            
-        if playlist_name and len(songs) > 1:
-            # TODO rank it acording to popularity or similarity
-            print(f"Multiple songs found for '{artist_song}'. Please specify the playlist to add to.")
-            
+            self._playlists[playlist_name].append(artist_song)
+                 
             
     def remove_song_from_playlist(self, artist_song: str) -> None:
         if artist_song not in self._current_playlist:
@@ -190,12 +189,11 @@ class MusicCRS(Agent):
             raise FileNotFoundError(f"MPD data folder not found: {mpd_folder}")
 
         if os.path.exists(db_file):
-            print(f"Database file '{db_file}' already exists. Skipping creation.")
+            print(f"Database file '{db_file}' already exists. Skipping _create_db_and_load_mpd.")
             return
          
         conn = sqlite3.connect(db_file)
         cursor = conn.cursor()
-
         # Create song, playlist and playlist_song(relation) tables
         cursor.executescript("""
         CREATE TABLE IF NOT EXISTS songs (

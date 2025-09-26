@@ -5,3 +5,5 @@ node_modules/
 mpd.v1/
 dialogue_export/
 data/
+.vscode/
+build/

@@ -11,8 +11,85 @@ from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.platforms import FlaskSocketPlatform
 from config import OLLAMA_HOST, OLLAMA_MODEL, OLLAMA_API_KEY, DB_PATH, MPD_DATA, DB_FOLDER, _INTENT_OPTIONS
 import sqlite3
-import json
-import os
+from threading import Lock
+
+# --- Module-level indexing guard (runs once per process) ---
+_indexes_lock = Lock()
+_indexes_done = False
+_sqlite_cfg_lock = Lock()
+_sqlite_cfg_done = False
+
+
+def _ensure_indexes_once() -> None:
+    """Create helpful SQLite indexes once per process in a safe, idempotent way.
+
+    Uses a module-level flag and lock to avoid concurrent index creation when
+    multiple agent instances are constructed concurrently (e.g., per connection).
+    """
+    global _indexes_done
+    if _indexes_done:
+        return
+    with _indexes_lock:
+        if _indexes_done:
+            return
+        conn = None
+        try:
+            # Use a small timeout to reduce "database is locked" errors during startup
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            # Case-insensitive composite indexes to match query predicates and ordering
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_songs_title_artist_nocase ON songs(title COLLATE NOCASE, artist COLLATE NOCASE)"
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_songs_artist_title_nocase ON songs(artist COLLATE NOCASE, title COLLATE NOCASE)"
+            )
+            # Cover COUNT(DISTINCT playlist_id) per song efficiently
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_playlist_songs_song_playlist ON playlist_songs(song_id, playlist_id)"
+            )
+            conn.commit()
+            _indexes_done = True
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+
+def _configure_sqlite_once() -> None:
+    """Apply one-time SQLite pragmas for better concurrency and performance.
+
+    - Enable WAL journal mode to reduce writer-reader blocking
+    - Set synchronous=NORMAL for a good performance/durability balance
+    """
+    global _sqlite_cfg_done
+    if _sqlite_cfg_done:
+        return
+    with _sqlite_cfg_lock:
+        if _sqlite_cfg_done:
+            return
+        conn = None
+        try:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cur = conn.cursor()
+            cur.execute("PRAGMA journal_mode=WAL;")
+            cur.execute("PRAGMA synchronous=NORMAL;")
+            # Optional: provide the planner with better stats after initial load
+            try:
+                cur.execute("PRAGMA analyze;")
+            except Exception:
+                # Ignore if not permitted in some envs
+                pass
+            conn.commit()
+            _sqlite_cfg_done = True
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 class MusicCRS(Agent):
     def __init__(self, use_llm: bool = True):
@@ -26,11 +103,18 @@ class MusicCRS(Agent):
             )
         else:
             self._llm = None
-            
-        self._create_db_and_load_mpd()  # Create and load the database if it doesn't exist
-        self._current_playlist: str | None = None  # Name of active playlist
+
+        # Create and load the database if it doesn't exist
+        self._create_db_and_load_mpd()
+        # Configure SQLite and ensure indexes once per process
+        _configure_sqlite_once()
+        _ensure_indexes_once()
+
+        self._current_playlist = None  # Name of active playlist
         # Stores playlists as: name -> list of entries {id:int, artist:str, title:str}
-        self._playlists: dict[str, list[dict]] = {}
+        self._playlists = {}
+        # Stores last disambiguation candidates for '/pl add <title>'
+        self._pending_additions = None
 
     # --- playlist functions ---
     def add_playlist(self, playlist_name: str) -> str:
@@ -147,6 +231,7 @@ class MusicCRS(Agent):
         # /pl remove <artist>: <title>
         # /pl view [name]
         # /pl clear [name]
+        # /pl choose <n>
         parts = command.split(" ", 1)
         if not parts:
             return self._pl_help()
@@ -156,11 +241,44 @@ class MusicCRS(Agent):
         if action in ("use", "new"):
             return self.add_playlist(arg)
         elif action == "add":
-            artist, title = self._parse_song_spec(arg)
-            return self.add_song_to_playlist(artist, title)
+            # Support either "Artist: Title" or just "Title"
+            if ":" in arg:
+                artist, title = self._parse_song_spec(arg)
+                return self.add_song_to_playlist(artist, title)
+            else:
+                title = arg
+                if not self._current_playlist:
+                    return "No active playlist. Use '/pl use [name]' before adding songs."
+                candidates = self._find_songs_by_title(title)
+                if not candidates:
+                    return f"No songs found with title '{title}'."
+                if len(candidates) == 1:
+                    song = candidates[0]
+                    return self.add_song_to_playlist(song["artist"], song["title"]) 
+                # Keep up to top 10 candidates for selection
+                self._pending_additions = candidates[:10]
+                items_html = "\n".join([f"<li>{s['artist']} - {s['title']}</li>" for s in self._pending_additions])
+                return (
+                    f"Found multiple songs titled '{title}'.\n<ol>\n"
+                    + items_html
+                    + "\n</ol>\nType '/pl choose N' to add one of the above."
+                )
         elif action == "remove":
             artist, title = self._parse_song_spec(arg)
             return self.remove_song_from_playlist(artist, title)
+        elif action in ("choose", "pick"):
+            if not self._pending_additions:
+                return "There is nothing to choose from. Use '/pl add [title]' first."
+            try:
+                idx = int(arg) - 1
+            except ValueError:
+                return "Please provide a valid number, e.g., '/pl choose 1'."
+            if idx < 0 or idx >= len(self._pending_additions):
+                return f"Please choose a number between 1 and {len(self._pending_additions)}."
+            song = self._pending_additions[idx]
+            # Clear pending to avoid accidental reuse
+            self._pending_additions = None
+            return self.add_song_to_playlist(song["artist"], song["title"])
         elif action == "view":
             name = arg or None
             items = self.view_playlist(name)
@@ -180,9 +298,11 @@ class MusicCRS(Agent):
             "Playlist commands:\n"
             "- /pl use [name]   (create/switch)\n"
             "- /pl add [artist]: [title]\n"
+            "- /pl add [title]   (disambiguate if needed with '/pl choose N')\n"
             "- /pl remove [artist]: [title]\n"
             "- /pl view [name]\n"
-            "- /pl clear [name]"
+            "- /pl clear [name]\n"
+            "- /pl choose N"
         )
 
     def _parse_song_spec(self, spec: str) -> tuple[str, str]:
@@ -244,7 +364,7 @@ class MusicCRS(Agent):
             print(f"Database file '{db_file}' already exists. Skipping _create_db_and_load_mpd.")
             return
          
-        conn = sqlite3.connect(db_file)
+        conn = sqlite3.connect(db_file, timeout=30)
         cursor = conn.cursor()
         # Create song, playlist and playlist_song(relation) tables
         cursor.executescript("""
@@ -331,7 +451,7 @@ class MusicCRS(Agent):
         """Return a single song dict if found exactly (case-insensitive), else None."""
         if not artist or not title:
             return None
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(DB_PATH, timeout=30)
         cursor = conn.cursor()
         cursor.execute(
             "SELECT id, artist, title FROM songs WHERE artist = ? COLLATE NOCASE AND title = ? COLLATE NOCASE",
@@ -343,6 +463,28 @@ class MusicCRS(Agent):
             return None
         sid, sartist, stitle = row
         return {"id": sid, "artist": sartist, "title": stitle}
+
+    def _find_songs_by_title(self, title: str) -> list[dict]:
+        """Return list of songs with given title, ranked by popularity (#playlists)."""
+        if not title:
+            return []
+        conn = sqlite3.connect(DB_PATH, timeout=30)
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            SELECT s.id, s.artist, s.title, COUNT(DISTINCT ps.playlist_id) AS popularity
+            FROM songs s
+            LEFT JOIN playlist_songs ps ON ps.song_id = s.id
+            WHERE s.title = ? COLLATE NOCASE
+            GROUP BY s.id, s.artist, s.title
+            ORDER BY popularity DESC, s.artist COLLATE NOCASE ASC
+            LIMIT 10
+            """,
+            (title,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"id": sid, "artist": artist, "title": stitle} for (sid, artist, stitle, _) in rows]
         
 if __name__ == "__main__":
     platform = FlaskSocketPlatform(MusicCRS)

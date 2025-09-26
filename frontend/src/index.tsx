@@ -14,6 +14,7 @@ import App from "./App";
 
 import reportWebVitals from "./reportWebVitals";
 import { SocketProvider } from "./contexts/SocketContext";
+import { PlaylistProvider } from "./contexts/PlaylistContext";
 
 let root: ReactDOM.Root;
 
@@ -57,7 +58,9 @@ window.ChatWidget = (config, containerId) => {
     <ConfigProvider>
       <SocketProvider>
         <UserProvider>
-          <ConfigLoader config={config} />
+          <PlaylistProvider>
+            <ConfigLoader config={config} />
+          </PlaylistProvider>
         </UserProvider>
       </SocketProvider>
     </ConfigProvider>

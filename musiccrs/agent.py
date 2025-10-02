@@ -105,17 +105,17 @@ class MusicCRS(Agent):
         if not parts:
             return self._pl_help()
         action = parts[0].lower()
-        song_request = parts[1].strip() if len(parts) > 1 else ""
+        arg = parts[1].strip() if len(parts) > 1 else ""
 
         if action in ("use", "new"):
-            return self.playlists.use(song_request)
+            return self.playlists.use(arg)
         elif action == "add":
             # Support either "Artist: Title" or just "Title"
-            if ":" in song_request:
-                artist, title = self._parse_song_spec(song_request)
+            if ":" in arg:
+                artist, title = self._parse_song_spec(arg)
                 return self.playlists.add_song({"artist": artist, "title": title, "id": f"{artist}-{title}"})
             else:
-                title = song_request  # If no colon, treat request as title only
+                title = arg  # If no colon, treat request as title only
                 candidates = find_songs_by_title(title)
                 if not candidates:
                     return f"No songs found with title '{title}'."
@@ -125,13 +125,13 @@ class MusicCRS(Agent):
                 self._pending_additions = candidates
                 return "Multiple matches: <br>" + "<br>".join([f"{i+1}. {c['artist']} : {c['title']}" for i, c in enumerate(candidates)]) + "<br>Use '/pl choose [number]' to select."
         elif action == "remove":
-            artist, title = self._parse_song_spec(song_request)
+            artist, title = self._parse_song_spec(arg)
             return self.playlists.remove_song(artist, title)
         elif action in ("choose"):
             if not self._pending_additions:
                 return self._pl_help()
             try:
-                idx = int(song_request) - 1
+                idx = int(arg) - 1
             except ValueError:
                 return "Please provide a valid number, e.g., '/pl choose 1'."
             if idx < 0 or idx >= len(self._pending_additions):
@@ -150,12 +150,12 @@ class MusicCRS(Agent):
             # Otherwise assume dict with artist/title
             return self.playlists.add_song(song)
         elif action == "view":
-            items = self.playlists.view(song_request or None)
+            items = self.playlists.view(arg or None)
             if not items:
                 return "Playlist is empty."
             return "<br>".join([f"{i+1}. {s['artist']} - {s['title']}" for i, s in enumerate(items)])
         elif action == "clear":
-            return self.playlists.clear(song_request or None)
+            return self.playlists.clear(arg or None)
         else:
             return self._pl_help()
 

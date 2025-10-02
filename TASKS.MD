@@ -5,7 +5,7 @@
 **Delivery:** Online submission using [this form](Links to an external site)
 
 - [x] **R1.1:** Two playlists/profiles (one per group member) – 4p  
-- [+1] **R1.2:** Up to three additional playlists/profiles by other people (friends, family, etc.) – 6p  
+- [x] **R1.2:** Up to three additional playlists/profiles by other people (friends, family, etc.) – 6p  
 
 ---
 
@@ -16,7 +16,7 @@
 - [x] **R2.1:** Set up a web-based chat environment – 1p  
 - [x] **R2.2:** Add/remove songs, view/clear playlist, integrate Spotify Million Playlist Dataset – 4p  
 - [ ] **R2.3:** Extend UI to interact directly with the playlist – 3p (Depends on R2.1)  
-- [ ] **R2.4:** Provide way for users to learn system functionality – 1p  
+- [x] **R2.4:** Provide way for users to learn system functionality – 1p  
 - [x] **R2.5:** Support multiple playlists – 2p (Depends on R2.2)  
 - [ ] **R2.6:** Display playlist cover image automatically – 2p (Depends on R2.1)  
 

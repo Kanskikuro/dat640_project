@@ -1,12 +1,14 @@
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 OLLAMA_HOST = "https://ollama.ux.uis.no"
 OLLAMA_MODEL = "llama3.3:70b"
-OLLAMA_API_KEY = "SET YOUR API KEY HERE"
+OLLAMA_API_KEY = os.getenv("OLLAMA_API_KEY")
 
-DB_FOLDER = "data"
-DB_PATH = "data/spotify.db" 
+BACKEND_PATH = "musiccrs"
+DB_FOLDER = "db"
+DB_PATH = f"{BACKEND_PATH}/{DB_FOLDER}/music.db"
 MPD_DATA = "mpd.v1\data"
 
 
-from dialoguekit.core.intent import Intent
-
-_INTENT_OPTIONS = Intent("OPTIONS")

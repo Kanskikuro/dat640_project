@@ -5,7 +5,7 @@
 **Delivery:** Online submission using [this form](Links to an external site)
 
 - [x] **R1.1:** Two playlists/profiles (one per group member) – 4p  
-- [+1] **R1.2:** Up to three additional playlists/profiles by other people (friends, family, etc.) – 6p  
+- [x] **R1.2:** Up to three additional playlists/profiles by other people (friends, family, etc.) – 6p  
 
 ---
 
@@ -26,8 +26,8 @@
 **Deadline:** w42 (Oct 19)  
 **Delivery:** In-person demo
 
-- [x] **R3.1:** Add songs by title with disambiguation – 2p (Depends on R2.2)  
-- [x] **R3.2:** Rank disambiguation suggestions intelligently – 1p (Depends on R3.1)  
+- [ ] **R3.1:** Add songs by title with disambiguation – 2p (Depends on R2.2)  
+- [ ] **R3.2:** Rank disambiguation suggestions intelligently – 1p (Depends on R3.1)  
 - [ ] **R3.3:** Ask questions about tracks/artists (support 4 types) – 4p (Depends on R2.2)  
 - [ ] **R3.4:** Ask questions about compilation albums – 1p (Depends on R2.2)  
 - [ ] **R3.5:** Provide textual/visual playlist summary – 2p (Depends on R2.2)  

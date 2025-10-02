@@ -123,7 +123,7 @@ class MusicCRS(Agent):
                     return self.playlists.add_song(candidates[0])
                 # Keep up to top 10 candidates for selection
                 self._pending_additions = candidates
-                return "Multiple matches: <br>" + "<br>".join([f"{i+1}. {c['artist']} : {c['title']}" for i, c in enumerate(candidates)]) + "<br>Use '/pl choose [number]' to select."
+                return "Multiple matches: <br>" + "<br>".join([f"{i+1}. {c['artist']} : {c['title']}" for i, c in enumerate(candidates)]) + "<br>Use '/pl choose [number]' to select. This option is a one-time use."
         elif action == "remove":
             artist, title = self._parse_song_spec(arg)
             return self.playlists.remove_song(artist, title)
@@ -163,11 +163,11 @@ class MusicCRS(Agent):
         help_text = (
             "Playlist commands:"
             "<br> - /pl use [playlist name]   (create/switch playlist)"
-            "<br> - /pl add [artist]: [title]"
-            "<br> - /pl add [title]   (disambiguate if needed with '/pl choose a number from the list')"
-            "<br> - /pl remove [artist]: [title]"
-            "<br> - /pl view [name]"
-            "<br> - /pl clear [name]"
+            "<br> - /pl add [artist]: [song title]"
+            "<br> - /pl add [song title]   (disambiguate if needed with '/pl choose a number from the list')"
+            "<br> - /pl remove [artist]: [song title]"
+            "<br> - /pl view [playlist name]"
+            "<br> - /pl clear [plalylist name]"
             "<br> - /pl choose [index of the list of songs]"
         )
         return help_text

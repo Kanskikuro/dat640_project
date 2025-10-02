@@ -16,7 +16,7 @@
 - [x] **R2.1:** Set up a web-based chat environment – 1p  
 - [x] **R2.2:** Add/remove songs, view/clear playlist, integrate Spotify Million Playlist Dataset – 4p  
 - [ ] **R2.3:** Extend UI to interact directly with the playlist – 3p (Depends on R2.1)  
-- [ ] **R2.4:** Provide way for users to learn system functionality – 1p  
+- [x] **R2.4:** Provide way for users to learn system functionality – 1p  
 - [x] **R2.5:** Support multiple playlists – 2p (Depends on R2.2)  
 - [ ] **R2.6:** Display playlist cover image automatically – 2p (Depends on R2.1)  
 
@@ -26,8 +26,8 @@
 **Deadline:** w42 (Oct 19)  
 **Delivery:** In-person demo
 
-- [ ] **R3.1:** Add songs by title with disambiguation – 2p (Depends on R2.2)  
-- [ ] **R3.2:** Rank disambiguation suggestions intelligently – 1p (Depends on R3.1)  
+- [x] **R3.1:** Add songs by title with disambiguation – 2p (Depends on R2.2)  
+- [x] **R3.2:** Rank disambiguation suggestions intelligently – 1p (Depends on R3.1)  
 - [ ] **R3.3:** Ask questions about tracks/artists (support 4 types) – 4p (Depends on R2.2)  
 - [ ] **R3.4:** Ask questions about compilation albums – 1p (Depends on R2.2)  
 - [ ] **R3.5:** Provide textual/visual playlist summary – 2p (Depends on R2.2)  

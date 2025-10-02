@@ -195,7 +195,14 @@ class MusicCRS(Agent):
 
     def _info(self) -> str:
         """Gives information about the agent."""
-        return "I am MusicCRS, a conversational recommender system for music. I can help you create playlists and recommend songs. You can ask me to add or remove songs from your playlist, view your current playlist, or clear it. You can also ask me for music recommendations based on your mood or preferences. To get started, you can use commands like '/ask_llm <your prompt>' to interact with a large language model, or '/options' to see some example options."
+        return """I am MusicCRS, a conversational recommender system for music. 
+    I can help you create playlists and recommend songs. 
+    You can ask me to add or remove songs from your playlist, view your current playlist, or clear it. 
+    You can also ask me for music recommendations based on your mood or preferences. 
+    To get started, you can use commands like '/ask_llm <your prompt>' to interact with a large language model, or '/options' to see some example options.  
+    For playlist management, use commands starting with '/pl'. Type '/pl' for help on playlist commands.
+    Type '/quit' to end the conversation.
+    """
 
     def _ask_llm(self, prompt: str) -> str:
         """Calls a large language model (LLM) with the given prompt.

@@ -20,10 +20,12 @@ import {
 import { AgentChatMessage, UserChatMessage } from "../ChatMessage";
 import { ChatMessage } from "../../types";
 import { ConfigContext } from "../../contexts/ConfigContext";
+import { usePlaylist } from "../../contexts/PlaylistContext";
 
 export default function ChatBox() {
   const { config } = useContext(ConfigContext);
   const { user } = useContext(UserContext);
+  const { addItem } = usePlaylist();
   const {
     startConversation,
     sendMessage,
@@ -35,6 +37,9 @@ export default function ChatBox() {
   const [chatMessages, setChatMessages] = useState<JSX.Element[]>([]);
   const [chatButtons, setChatButtons] = useState<JSX.Element[]>([]);
   const [inputValue, setInputValue] = useState<string>("");
+  const [showAddFields, setShowAddFields] = useState<boolean>(false);
+  const [addArtist, setAddArtist] = useState<string>("");
+  const [addTitle, setAddTitle] = useState<string>("");
   const chatMessagesRef = useRef(chatMessages);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -160,8 +165,8 @@ export default function ChatBox() {
             </div>
           </div>
         </MDBCardBody>
-        <MDBCardFooter className="text-muted d-flex justify-content-start align-items-center p-2">
-          <form className="d-flex flex-grow-1" onSubmit={handleInput}>
+        <MDBCardFooter className="text-muted d-flex flex-column gap-2 p-2">
+          <form className="d-flex w-100" onSubmit={handleInput}>
             <input
               type="text"
               className="form-control form-control-lg"
@@ -169,11 +174,51 @@ export default function ChatBox() {
               onChange={(e) => setInputValue(e.target.value)}
               placeholder="Type message"
               ref={inputRef}
-            ></input>
+            />
             <button type="submit" className="btn btn-link text-muted">
               <MDBIcon fas size="2x" icon="paper-plane" />
             </button>
           </form>
+          <div className="d-flex align-items-center w-100">
+            <button
+              className="btn btn-sm btn-outline-primary me-2"
+              onClick={() => setShowAddFields((s) => !s)}
+            >
+              <MDBIcon fas icon="plus" className="me-1" /> Add to playlist
+            </button>
+            {showAddFields && (
+              <>
+                <input
+                  type="text"
+                  className="form-control form-control-sm me-2"
+                  placeholder="Artist"
+                  value={addArtist}
+                  onChange={(e) => setAddArtist(e.target.value)}
+                  style={{ maxWidth: 200 }}
+                />
+                <input
+                  type="text"
+                  className="form-control form-control-sm me-2"
+                  placeholder="Title"
+                  value={addTitle}
+                  onChange={(e) => setAddTitle(e.target.value)}
+                  style={{ maxWidth: 240 }}
+                />
+                <button
+                  className="btn btn-sm btn-success"
+                  onClick={() => {
+                    if (!addArtist && !addTitle) return;
+                    addItem({ artist: addArtist, title: addTitle });
+                    setAddArtist("");
+                    setAddTitle("");
+                    setShowAddFields(false);
+                  }}
+                >
+                  <MDBIcon fas icon="check" className="me-1" /> Add
+                </button>
+              </>
+            )}
+          </div>
         </MDBCardFooter>
       </MDBCard>
     </div>

@@ -8,3 +8,4 @@ musiccrs/db/
 .vscode/
 build/
 musiccrs/.env
+venv/

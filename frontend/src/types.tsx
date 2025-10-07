@@ -29,22 +29,15 @@ export type UserMessage = {
 };
 
 // Playlist types
-export type PlaylistItem = {
-  id: string; // stable id for drag/drop
-  artist: string;
-  title: string;
-  album?: string;
-  durationMs?: number;
-  spotifyUri?: string;
-};
+export type PlaylistContextType = {
+  switchPlaylist: (playlistName: string) => void;
+  createPlaylist: (playlistName: string) => void;
+  removePlaylist: (playlistName?: string) => void;
+  viewPlaylist: (playlistName?: string) => void;
+  viewPlaylists: () => void;
+  clearPlaylist: (playlistName?: string) => void;
+  onPlaylistResponse: (callback: (message: string) => void) => void;
 
-export type PlaylistState = {
-  items: PlaylistItem[];
-};
-
-export type PlaylistActions = {
-  addItem: (item: Omit<PlaylistItem, "id">) => void;
-  removeItem: (id: string) => void;
-  clear: () => void;
-  reorder: (fromIndex: number, toIndex: number) => void;
+  addSong: (song: string, playlist?: string) => void;
+  removeSong: (song: string, playlist?: string) => void;
 };

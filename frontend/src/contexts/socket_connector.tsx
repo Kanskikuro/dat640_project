@@ -4,15 +4,15 @@ import { AgentMessage, UserMessage, ChatMessage } from "../types";
 
 export default function useSocketConnection(
   url: string = "http://127.0.0.1:5000",
-  path: string | undefined
+  path: string = "/socket.io"
 ) {
   const [socket, setSocket] = useState<Socket | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [connectError, setConnectError] = useState<Error | null>(null);
   const onMessageRef = useRef<(message: ChatMessage) => void>();
   const onRestartRef = useRef<() => void>();
-  const onAuthenticationRef =
-    useRef<(success: boolean, error: string) => void>();
+  const onAuthenticationRef = useRef<(success: boolean, error: string) => void>();
+  const onPlaylistResponseRef = useRef<(text: string) => void>();
 
   useEffect(() => {
     const newSocket = io(url, { path: path });
@@ -53,6 +53,9 @@ export default function useSocketConnection(
     newSocket.on("authentication", ({ success, error }) => {
       onAuthenticationRef.current &&
         onAuthenticationRef.current(success, error);
+    });
+        newSocket.on("pl_response", ({ text }: { text: string }) => {
+      onPlaylistResponseRef.current?.(text);
     });
 
     return () => {
@@ -98,7 +101,25 @@ export default function useSocketConnection(
     onAuthenticationRef.current = callback;
   };
 
+  const createPlaylist = (playlistName: string) => socket?.emit("pl_create", { playlistName });
+  const switchPlaylist = (playlistName: string) => socket?.emit("pl_switch", { playlistName });
+  const removePlaylist = (playlistName: string) => socket?.emit("pl_remove_playlist", { playlistName });
+  const addSong = (song: any, playlistName?: string) =>
+    socket?.emit("pl_add", { song, playlistName });
+  const removeSong = (artist: string, title: string) =>
+    socket?.emit("pl_remove", { artist, title });
+  const viewPlaylist = (playlistName?: string) =>
+    socket?.emit("pl_view", { playlistName });
+  const viewPlaylists = () =>
+    socket?.emit("pl_view_playlists", {});
+  const clearPlaylist = (playlistName?: string) =>
+    socket?.emit("pl_clear", { playlistName });
+  const onPlaylistResponse = (callback: (text: string) => void) => {
+    onPlaylistResponseRef.current = callback;
+  };
+
   return {
+    socket,
     isConnected,
     startConversation,
     sendMessage,
@@ -109,5 +130,15 @@ export default function useSocketConnection(
     login,
     register,
     onAuthentication,
+    // Playlist
+    createPlaylist,
+    switchPlaylist,
+    removePlaylist,
+    addSong,
+    removeSong,
+    viewPlaylist,
+    viewPlaylists,
+    clearPlaylist,
+    onPlaylistResponse,
   };
 }

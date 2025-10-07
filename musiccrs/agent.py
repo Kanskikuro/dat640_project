@@ -19,6 +19,7 @@ from playlist import PlaylistManager
 from llm import LLMClient
 from config import DB_PATH
 from dialoguekit.core.dialogue_act import DialogueAct
+from spotify import SpotifyClient
 
 _INTENT_OPTIONS = Intent("OPTIONS")
 
@@ -33,6 +34,7 @@ class MusicCRS(Agent):
         ensure_indexes_once()
         self.playlists = PlaylistManager()
         self._pending_additions = None
+        self._spotify = SpotifyClient()
 
     def welcome(self) -> None:
         """Sends the agent's welcome message."""
@@ -65,7 +67,7 @@ class MusicCRS(Agent):
             response = self._info()
         elif utterance.text.startswith("/ask_llm "):
             prompt = utterance.text[9:]
-            response = self._ask_llm(prompt)
+            response = self._llm.ask(prompt)
         elif utterance.text.startswith("/options"):
             options = [
                 "Play some jazz music",
@@ -84,10 +86,12 @@ class MusicCRS(Agent):
         elif utterance.text == "/quit":
             self.goodbye()
             return
-        elif utterance.text.startswith("/pl"):
-            response = self._handle_playlist_command(utterance.text[4:].strip())
+        elif utterance.text.startswith("/play"):
+            response = self._handle_play_command(utterance.text[5:].strip())
         elif utterance.text.startswith("/qa"):
             response = self._handle_qa_command(utterance.text[3:].strip())
+        elif utterance.text.startswith("/pl"):
+            response = self._handle_playlist_command(utterance.text[4:].strip())
         else:
             response = "I'm sorry, I don't understand that command."
 
@@ -186,6 +190,76 @@ class MusicCRS(Agent):
             return "", ""
         artist, title = spec.split(":", 1)
         return artist.strip(), title.strip()
+
+    # --- Playback commands ---
+    def _handle_play_command(self, command: str) -> str:
+        """
+        Play commands:
+          - /play track <artist>: <title>
+          - /play uri <spotify_track_uri_or_url>
+        Renders an HTML5 <audio> with preview if available, else a link.
+        """
+        if not command:
+            return self._play_help()
+
+        parts = command.split(None, 1)
+        if len(parts) < 2:
+            return self._play_help()
+
+        target = parts[0].lower()
+        rest = parts[1].strip()
+
+        if target == "track":
+            if ":" not in rest:
+                return "Please specify the song as 'Artist: Title'."
+            artist, title = self._parse_song_spec(rest)
+            info = get_track_info(artist, title)
+            if not info:
+                return f"Track not found: {artist} - {title}."
+            uri = info.get("spotify_uri")
+            if not uri:
+                return (
+                    f"No Spotify URI found for {artist} - {title}. Try '/qa track {artist}: {title} spotify' to check."
+                )
+            return self._render_player(uri, label=f"{artist} - {title}")
+
+        if target == "uri":
+            return self._render_player(rest, label="Spotify track")
+
+        return self._play_help()
+
+    def _render_player(self, spotify_uri_or_url: str, label: str) -> str:
+        link = self._spotify.open_spotify_track_url(spotify_uri_or_url) or "#"
+        preview = self._spotify.get_preview_url(spotify_uri_or_url)
+        if preview:
+            return (
+                f"<div><strong>Playing preview:</strong> {label}<br>"
+                f"<audio controls src=\"{preview}\" preload=\"none\"></audio>"
+                f"<br><a href=\"{link}\" target=\"_blank\">Open in Spotify</a></div>"
+            )
+        # Fallback: Spotify embed (30s preview UI) without requiring SDK or login
+        track_id = self._spotify.parse_spotify_track_id(spotify_uri_or_url)
+        if track_id:
+            embed = (
+                f"<iframe style=\"border-radius:12px\" "
+                f"src=\"https://open.spotify.com/embed/track/{track_id}\" "
+                f"width=\"100%\" height=\"80\" frameborder=\"0\" allow=\"autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture\" loading=\"lazy\"></iframe>"
+            )
+            return (
+                f"<div><strong>Preview:</strong> {label}<br>{embed}"
+                f"<br><a href=\"{link}\" target=\"_blank\">Open in Spotify</a></div>"
+            )
+        return (
+            f"<div>No preview available for {label}. "
+            f"<a href=\"{link}\" target=\"_blank\">Open in Spotify</a></div>"
+        )
+
+    def _play_help(self) -> str:
+        return (
+            "Play commands:"
+            "<br> - /play track [Artist]: [Title]"
+            "<br> - /play uri [spotify track uri or open.spotify.com link]"
+        )
 
     # --- QA commands ---
     def _handle_qa_command(self, command: str) -> str:
@@ -295,15 +369,6 @@ class MusicCRS(Agent):
         minutes = seconds // 60
         secs = seconds % 60
         return f"{minutes}:{secs:02d}"
-
-    # --- LLM passthrough ---
-    def _ask_llm(self, prompt: str) -> str:
-        if not self._llm:
-            return "LLM is disabled."
-        try:
-            return self._llm.ask(prompt)
-        except Exception as e:
-            return f"LLM error: {e}"
 
     def _info(self):
         return """I am MusicCRS, a conversational recommender system for music. 

@@ -7,7 +7,14 @@ from dialoguekit.participant.agent import Agent
 from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.core.intent import Intent
 
-from db import create_db_and_load_mpd, configure_sqlite_once, ensure_indexes_once, find_song_in_db, find_songs_by_title
+from db import (
+    create_db_and_load_mpd,
+    configure_sqlite_once,
+    ensure_indexes_once,
+    find_song_in_db,
+    find_songs_by_title,
+)
+from db import get_track_info, get_artist_stats
 from playlist import PlaylistManager
 from llm import LLMClient
 from config import DB_PATH
@@ -79,6 +86,8 @@ class MusicCRS(Agent):
             return
         elif utterance.text.startswith("/pl"):
             response = self._handle_playlist_command(utterance.text[4:].strip())
+        elif utterance.text.startswith("/qa"):
+            response = self._handle_qa_command(utterance.text[3:].strip())
         else:
             response = "I'm sorry, I don't understand that command."
 
@@ -177,6 +186,124 @@ class MusicCRS(Agent):
             return "", ""
         artist, title = spec.split(":", 1)
         return artist.strip(), title.strip()
+
+    # --- QA commands ---
+    def _handle_qa_command(self, command: str) -> str:
+        """
+        QA commands:
+          - /qa track <artist>: <title> (album|duration|popularity|spotify|all)
+          - /qa artist <artist> (tracks|albums|top|playlists|all)
+        """
+        if not command:
+            return self._qa_help()
+
+        parts = command.split(None, 1)
+        if len(parts) < 2:
+            return self._qa_help()
+
+        target = parts[0].lower()
+        rest = parts[1].strip()
+
+        if target == "track":
+            # Expect "<artist>: <title> <qtype>"
+            qtypes = {"album", "duration", "popularity", "spotify", "all"}
+            if " " not in rest:
+                return (
+                    "Please provide a question type. Example: /qa track Artist: Title album"
+                )
+            song_spec, qtype = rest.rsplit(" ", 1)
+            qtype = qtype.lower()
+            if qtype not in qtypes:
+                return (
+                    f"Unknown track question '{qtype}'. Try: album, duration, popularity, spotify, all."
+                )
+
+            if ":" not in song_spec:
+                return "Please specify the song as 'Artist: Title'."
+            artist, title = self._parse_song_spec(song_spec)
+            info = get_track_info(artist, title)
+            if not info:
+                return f"Track not found: {artist} - {title}."
+
+            answers = []
+            if qtype in ("album", "all"):
+                answers.append(f"Album: {info.get('album') or 'Unknown'}")
+            if qtype in ("duration", "all"):
+                answers.append(
+                    f"Duration: {self._format_duration(info.get('duration_ms'))}"
+                )
+            if qtype in ("popularity", "all"):
+                answers.append(
+                    f"Popularity: appears in {info.get('popularity', 0)} playlists"
+                )
+            if qtype in ("spotify", "all"):
+                uri = info.get("spotify_uri") or "N/A"
+                answers.append(f"Spotify URI: {uri}")
+
+            return "<br>".join(answers)
+
+        elif target == "artist":
+            # Expect "<artist> <qtype>"
+            qtypes = {"tracks", "albums", "top", "playlists", "all"}
+            if " " not in rest:
+                return (
+                    "Please provide a question type. Example: /qa artist Artist Name top"
+                )
+            artist, qtype = rest.rsplit(" ", 1)
+            qtype = qtype.lower()
+            if qtype not in qtypes:
+                return (
+                    f"Unknown artist question '{qtype}'. Try: tracks, albums, top, playlists, all."
+                )
+
+            stats = get_artist_stats(artist.strip())
+            answers = []
+            if qtype in ("tracks", "all"):
+                answers.append(f"Tracks in collection: {stats['num_tracks']}")
+            if qtype in ("albums", "all"):
+                answers.append(f"Albums in collection: {stats['num_albums']}")
+            if qtype in ("playlists", "all"):
+                answers.append(
+                    f"Artist appears in {stats['num_playlists']} playlists"
+                )
+            if qtype in ("top", "all"):
+                if stats["top_tracks"]:
+                    top = "<br>".join(
+                        [
+                            f"{i+1}. {t['title']} (in {t['popularity']} playlists)"
+                            for i, t in enumerate(stats["top_tracks"])
+                        ]
+                    )
+                    answers.append(f"Top tracks:<br>{top}")
+                else:
+                    answers.append("Top tracks: N/A")
+            return "<br>".join(answers)
+        else:
+            return self._qa_help()
+
+    def _qa_help(self) -> str:
+        return (
+            "QA commands:"
+            "<br> - /qa track [Artist]: [Title] (album|duration|popularity|spotify|all)"
+            "<br> - /qa artist [Artist] (tracks|albums|top|playlists|all)"
+        )
+
+    def _format_duration(self, duration_ms: int | None) -> str:
+        if not duration_ms or duration_ms <= 0:
+            return "Unknown"
+        seconds = duration_ms // 1000
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}:{secs:02d}"
+
+    # --- LLM passthrough ---
+    def _ask_llm(self, prompt: str) -> str:
+        if not self._llm:
+            return "LLM is disabled."
+        try:
+            return self._llm.ask(prompt)
+        except Exception as e:
+            return f"LLM error: {e}"
 
     def _info(self):
         return """I am MusicCRS, a conversational recommender system for music. 

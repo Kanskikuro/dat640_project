@@ -177,3 +177,106 @@ def find_songs_by_title(title: str) -> list[dict]:
     rows = cursor.fetchall()
     conn.close()
     return [{"id": sid, "artist": artist, "title": stitle} for (sid, artist, stitle, _) in rows]
+
+
+def get_track_info(artist: str, title: str) -> dict | None:
+    """Return detailed information for a track.
+
+    Picks the most "popular" variant (by playlist count) if multiple rows exist
+    for the same artist/title across different albums.
+
+    Returns a dict with keys:
+      id, artist, title, album, duration_ms, spotify_uri, popularity
+    or None if not found.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    cur = conn.cursor()
+    # Find the best matching song id by popularity
+    cur.execute(
+        """
+        SELECT s.id, s.artist, s.title, s.album, s.duration_ms, s.spotify_uri,
+               COUNT(DISTINCT ps.playlist_id) AS popularity
+        FROM songs s
+        LEFT JOIN playlist_songs ps ON ps.song_id = s.id
+        WHERE s.artist = ? COLLATE NOCASE AND s.title = ? COLLATE NOCASE
+        GROUP BY s.id, s.artist, s.title, s.album, s.duration_ms, s.spotify_uri
+        ORDER BY popularity DESC, s.album COLLATE NOCASE ASC
+        LIMIT 1
+        """,
+        (artist, title),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    sid, sartist, stitle, album, duration_ms, spotify_uri, popularity = row
+    return {
+        "id": sid,
+        "artist": sartist,
+        "title": stitle,
+        "album": album,
+        "duration_ms": duration_ms,
+        "spotify_uri": spotify_uri,
+        "popularity": popularity or 0,
+    }
+
+
+def get_artist_stats(artist: str) -> dict:
+    """Return aggregate stats for an artist.
+
+    Returns dict with keys:
+      num_tracks, num_albums, num_playlists, top_tracks (list of {title, popularity})
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    cur = conn.cursor()
+
+    cur.execute(
+        "SELECT COUNT(*) FROM songs WHERE artist = ? COLLATE NOCASE",
+        (artist,),
+    )
+    num_tracks = cur.fetchone()[0] or 0
+
+    cur.execute(
+        """
+        SELECT COUNT(DISTINCT album)
+        FROM songs
+        WHERE artist = ? COLLATE NOCASE AND album IS NOT NULL AND album <> ''
+        """,
+        (artist,),
+    )
+    num_albums = cur.fetchone()[0] or 0
+
+    cur.execute(
+        """
+        SELECT COUNT(DISTINCT ps.playlist_id)
+        FROM songs s
+        JOIN playlist_songs ps ON ps.song_id = s.id
+        WHERE s.artist = ? COLLATE NOCASE
+        """,
+        (artist,),
+    )
+    num_playlists = cur.fetchone()[0] or 0
+
+    cur.execute(
+        """
+        SELECT s.title, COUNT(DISTINCT ps.playlist_id) AS popularity
+        FROM songs s
+        LEFT JOIN playlist_songs ps ON ps.song_id = s.id
+        WHERE s.artist = ? COLLATE NOCASE
+        GROUP BY s.title
+        ORDER BY popularity DESC, s.title COLLATE NOCASE ASC
+        LIMIT 3
+        """,
+        (artist,),
+    )
+    top_tracks = [
+        {"title": t, "popularity": (p or 0)} for (t, p) in cur.fetchall()
+    ]
+
+    conn.close()
+    return {
+        "num_tracks": num_tracks,
+        "num_albums": num_albums,
+        "num_playlists": num_playlists,
+        "top_tracks": top_tracks,
+    }

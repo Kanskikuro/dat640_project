@@ -7,7 +7,7 @@ from dialoguekit.participant.agent import Agent
 from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.core.intent import Intent
 
-from db import create_db_and_load_mpd, configure_sqlite_once, ensure_indexes_once, find_song_in_db, find_songs_by_title
+from db import find_song_in_db, find_songs_by_title
 from playlist import PlaylistManager
 from llm import LLMClient
 from config import DB_PATH

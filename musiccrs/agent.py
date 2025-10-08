@@ -7,14 +7,7 @@ from dialoguekit.participant.agent import Agent
 from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.core.intent import Intent
 
-from db import (
-    create_db_and_load_mpd,
-    configure_sqlite_once,
-    ensure_indexes_once,
-    find_song_in_db,
-    find_songs_by_title,
-)
-from db import get_track_info, get_artist_stats
+from db import find_song_in_db, find_songs_by_title, get_track_info, get_artist_stats
 from playlist import PlaylistManager
 from llm import LLMClient
 from config import DB_PATH
@@ -28,9 +21,6 @@ class MusicCRS(Agent):
         """Initialize MusicCRS agent."""
         super().__init__(id="MusicCRS")
         self._llm = LLMClient() if use_llm else None
-        create_db_and_load_mpd(DB_PATH)
-        configure_sqlite_once()
-        ensure_indexes_once()
         self.playlists = PlaylistManager()
         self._pending_additions = None
 
@@ -122,7 +112,13 @@ class MusicCRS(Agent):
             # Support either "Artist: Title" or just "Title"
             if ":" in arg:
                 artist, title = self._parse_song_spec(arg)
-                return self.playlists.add_song({"artist": artist, "title": title, "id": f"{artist}-{title}"})
+                if not artist or not title:
+                    return "Please provide both artist and title, e.g., '/pl add \"Artist\": \"Song Title\"'."
+                # Look up the exact song in the DB (case-insensitive)
+                song = find_song_in_db(artist, title)
+                if not song:
+                    return f"No exact match found in database for: {artist} - {title}."
+                return self.playlists.add_song(song)
             else:
                 title = arg  # If no colon, treat request as title only
                 candidates = find_songs_by_title(title)

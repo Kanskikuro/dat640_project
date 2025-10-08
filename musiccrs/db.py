@@ -13,9 +13,11 @@ _sqlite_cfg_done = False
 def ensure_indexes_once(): 
     global _indexes_done
     if _indexes_done:
+        print("Indexes already ensured.")
         return
     with _indexes_lock:
         if _indexes_done:
+            print("Indexes already ensured.")
             return
         conn = sqlite3.connect(DB_PATH, timeout=30)
         cursor = conn.cursor()
@@ -36,9 +38,11 @@ def ensure_indexes_once():
 def configure_sqlite_once():
     global _sqlite_cfg_done
     if _sqlite_cfg_done:
+        print("SQLite already configured.")
         return
     with _sqlite_cfg_lock:
         if _sqlite_cfg_done:
+            print("SQLite already configured.")
             return
         conn = sqlite3.connect(DB_PATH, timeout=30)
         cur = conn.cursor()
@@ -280,3 +284,9 @@ def get_artist_stats(artist: str) -> dict:
         "num_playlists": num_playlists,
         "top_tracks": top_tracks,
     }
+
+if __name__ == "__main__":
+    configure_sqlite_once()
+    ensure_indexes_once()
+    create_db_and_load_mpd(DB_PATH)
+    print("Database setup complete.")

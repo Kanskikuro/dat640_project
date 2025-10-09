@@ -1,7 +1,7 @@
 import "./ChatWidget.css";
 import { useState, MouseEvent, ReactNode } from "react";
 import { MDBIcon } from "mdb-react-ui-kit";
-import Playlist from "../Playlist";
+import Playlist from "../Playlist/Playlist";
 
 export default function ChatWidget({ children }: { children: ReactNode }) {
   const [isChatBoxOpen, setIsChatBoxOpen] = useState<boolean>(false);

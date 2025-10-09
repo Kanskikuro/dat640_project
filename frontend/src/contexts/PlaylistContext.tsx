@@ -1,44 +1,107 @@
-import React, { createContext, useCallback, useContext, useMemo, useState } from "react";
-import type { PlaylistActions, PlaylistItem, PlaylistState } from "../types";
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { useSocket } from "./SocketContext";
+import { PlaylistContextType } from "../types";
 
-type PlaylistContextType = PlaylistState & PlaylistActions;
+const PlaylistContext = createContext<PlaylistContextType | undefined>(
+  undefined
+);
 
-const PlaylistContext = createContext<PlaylistContextType | undefined>(undefined);
+export const PlaylistProvider = ({ children }: { children: React.ReactNode }) => {
+  const { socket } = useSocket();
 
-export const usePlaylist = (): PlaylistContextType => {
-  const ctx = useContext(PlaylistContext);
-  if (!ctx) throw new Error("usePlaylist must be used within PlaylistProvider");
-  return ctx;
+  useEffect(() => {
+    if (!socket) return;
+
+    // Just relay the response - don't process it here
+    const handleResponse = (data: any) => {
+      console.log("PlaylistContext received response:", data);
+    };
+
+    socket.on("pl_response", handleResponse);
+
+    return () => {
+      socket.off("pl_response", handleResponse);
+    };
+  }, [socket]);
+
+  const createPlaylist = (playlistName: string) => {
+    console.log("Creating playlist:", playlistName);
+    socket?.emit("pl_create", { playlistName });
+  };
+
+  const switchPlaylist = (playlistName: string) => {
+    console.log("Switching playlist:", playlistName);
+    socket?.emit("pl_switch", { playlistName });
+  };
+
+  const removePlaylist = (playlistName: string) => {
+    console.log("Removing playlist:", playlistName);
+    socket?.emit("pl_remove_playlist", { playlistName });
+  };
+
+  const addSong = (song: string, playlistName?: string) => {
+    console.log("Adding song:", song, "to playlist:", playlistName);
+    socket?.emit("pl_add", { song, playlistName });
+  };
+
+  const removeSong = (artist: string, title: string) => {
+    console.log("Removing song:", artist, title);
+    socket?.emit("pl_remove", { artist, title });
+  };
+
+  const viewPlaylist = (playlistName?: string) => {
+    console.log("Viewing playlist:", playlistName);
+    socket?.emit("pl_view", { playlistName });
+  };
+
+  const viewPlaylists = () => {
+    console.log("Viewing all playlists");
+    socket?.emit("pl_view_playlists", {});
+  };
+
+  const clearPlaylist = (playlistName?: string) => {
+    console.log("Clearing playlist:", playlistName);
+    socket?.emit("pl_clear", { playlistName });
+  };
+
+  const onPlaylistResponse = (callback: (response: any) => void) => {
+    if (!socket) return () => {};
+
+    const handler = (data: any) => {
+      console.log("Response handler called with:", data);
+      callback(data);
+    };
+    
+    socket.on("pl_response", handler);
+
+    return () => {
+      socket.off("pl_response", handler);
+    };
+  };
+
+  return (
+    <PlaylistContext.Provider
+      value={{
+        createPlaylist,
+        switchPlaylist,
+        removePlaylist,
+        addSong,
+        removeSong,
+        viewPlaylist,
+        viewPlaylists,
+        clearPlaylist,
+        onPlaylistResponse,
+      }}
+    >
+      {children}
+    </PlaylistContext.Provider>
+  );
 };
 
-const makeId = () => Math.random().toString(36).slice(2, 10);
-
-export const PlaylistProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [items, setItems] = useState<PlaylistItem[]>([]);
-
-  const addItem = useCallback((item: Omit<PlaylistItem, "id">) => {
-    setItems((prev) => [...prev, { ...item, id: makeId() }]);
-  }, []);
-
-  const removeItem = useCallback((id: string) => {
-    setItems((prev) => prev.filter((it) => it.id !== id));
-  }, []);
-
-  const clear = useCallback(() => setItems([]), []);
-
-  const reorder = useCallback((fromIndex: number, toIndex: number) => {
-    setItems((prev) => {
-      const next = prev.slice();
-      const [moved] = next.splice(fromIndex, 1);
-      next.splice(toIndex, 0, moved);
-      return next;
-    });
-  }, []);
-
-  const value = useMemo(
-    () => ({ items, addItem, removeItem, clear, reorder }),
-    [items, addItem, removeItem, clear, reorder]
-  );
-
-  return <PlaylistContext.Provider value={value}>{children}</PlaylistContext.Provider>;
+export const usePlaylist = () => {
+  const context = useContext(PlaylistContext);
+  if (!context) {
+    throw new Error("usePlaylist must be used within a PlaylistProvider");
+  }
+  return context;
 };

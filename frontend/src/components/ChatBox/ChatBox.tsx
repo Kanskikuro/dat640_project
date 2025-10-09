@@ -25,7 +25,6 @@ import { usePlaylist } from "../../contexts/PlaylistContext";
 export default function ChatBox() {
   const { config } = useContext(ConfigContext);
   const { user } = useContext(UserContext);
-  const { addItem } = usePlaylist();
   const {
     startConversation,
     sendMessage,
@@ -179,46 +178,6 @@ export default function ChatBox() {
               <MDBIcon fas size="2x" icon="paper-plane" />
             </button>
           </form>
-          <div className="d-flex align-items-center w-100">
-            <button
-              className="btn btn-sm btn-outline-primary me-2"
-              onClick={() => setShowAddFields((s) => !s)}
-            >
-              <MDBIcon fas icon="plus" className="me-1" /> Add to playlist
-            </button>
-            {showAddFields && (
-              <>
-                <input
-                  type="text"
-                  className="form-control form-control-sm me-2"
-                  placeholder="Artist"
-                  value={addArtist}
-                  onChange={(e) => setAddArtist(e.target.value)}
-                  style={{ maxWidth: 200 }}
-                />
-                <input
-                  type="text"
-                  className="form-control form-control-sm me-2"
-                  placeholder="Title"
-                  value={addTitle}
-                  onChange={(e) => setAddTitle(e.target.value)}
-                  style={{ maxWidth: 240 }}
-                />
-                <button
-                  className="btn btn-sm btn-success"
-                  onClick={() => {
-                    if (!addArtist && !addTitle) return;
-                    addItem({ artist: addArtist, title: addTitle });
-                    setAddArtist("");
-                    setAddTitle("");
-                    setShowAddFields(false);
-                  }}
-                >
-                  <MDBIcon fas icon="check" className="me-1" /> Add
-                </button>
-              </>
-            )}
-          </div>
         </MDBCardFooter>
       </MDBCard>
     </div>

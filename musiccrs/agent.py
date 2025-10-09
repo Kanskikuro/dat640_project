@@ -7,12 +7,11 @@ from dialoguekit.participant.agent import Agent
 from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.core.intent import Intent
 
-from db import find_song_in_db, find_songs_by_title
-from playlist import PlaylistManager
+from db import create_db_and_load_mpd, configure_sqlite_once, ensure_indexes_once, find_song_in_db, find_songs_by_title
+from playlist import shared_playlists
 from llm import LLMClient
 from config import DB_PATH
 from dialoguekit.core.dialogue_act import DialogueAct
-
 _INTENT_OPTIONS = Intent("OPTIONS")
 
 
@@ -21,13 +20,12 @@ class MusicCRS(Agent):
         """Initialize MusicCRS agent."""
         super().__init__(id="MusicCRS")
         self._llm = LLMClient() if use_llm else None
-        self.playlists = PlaylistManager()
-        self._pending_additions = None
+        self.playlists = shared_playlists
 
     def welcome(self) -> None:
         """Sends the agent's welcome message."""
         utterance = AnnotatedUtterance(
-            "Hello, I'm MusicCRS. What are you in the mood for?",
+            "Hello, I'm MusicCRS. Type '/info' for more information. What are you in the mood for?",
             participant=DialogueParticipant.AGENT,
         )
         self._dialogue_connector.register_agent_utterance(utterance)
@@ -75,7 +73,8 @@ class MusicCRS(Agent):
             self.goodbye()
             return
         elif utterance.text.startswith("/pl"):
-            response = self._handle_playlist_command(utterance.text[4:].strip())
+            response = self._handle_playlist_command(
+                utterance.text[4:].strip())
         else:
             response = "I'm sorry, I don't understand that command."
 
@@ -89,13 +88,15 @@ class MusicCRS(Agent):
 
     def _handle_playlist_command(self, command: str) -> str:
         """
-        # Supported:
-        # /pl use <name>
-        # /pl add <artist>: <title>
-        # /pl remove <artist>: <title>
-        # /pl view [name]
-        # /pl clear [name]
-        # /pl choose <n>
+            "Playlist commands:"
+            "<br> - /pl create [playlist name]   (create playlist)"
+            "<br> - /pl switch [playlist name]   (switch to existing or create new playlist)"
+            "<br> - /pl add [artist]: [song title]"
+            "<br> - /pl add [song title]   (disambiguate if needed with '/pl choose a number from the list')"
+            "<br> - /pl remove [artist]: [song title]"
+            "<br> - /pl view [playlist name] or none for current"
+            "<br> - /pl clear [playlist name] or none for current"
+            "<br> - /pl choose [index of the list of songs]"
         """
 
         parts = command.split(" ", 1)
@@ -104,73 +105,47 @@ class MusicCRS(Agent):
         action = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        if action in ("use", "new"):
-            return self.playlists.use(arg)
+        # Playlist
+        if action == "create":
+            return self.playlists.create_playlist(arg)
+        elif action == "switch":
+            return self.playlists.switch_playlist(arg)
+        elif action == "view":
+            items = self.playlists.view(arg or None)
+            if isinstance(items, str):
+                return items
+            return "<br>".join(f"{s['title']} : {s['artist']}" for s in items)
+
+        elif action == "clear":
+            return self.playlists.clear(arg or None)
+
+        # Song
         elif action == "add":
-            # Support either "Artist: Title" or just "Title"
-            if ":" in arg:
-                artist, title = self._parse_song_spec(arg)
-                if not artist or not title:
-                    return "Please provide both artist and title, e.g., '/pl add \"Artist\": \"Song Title\"'."
-                # Look up the exact song in the DB (case-insensitive)
-                song = find_song_in_db(artist, title)
-                if not song:
-                    return f"No exact match found in database for: {artist} - {title}."
-                return self.playlists.add_song(song)
-            else:
-                title = arg  # If no colon, treat request as title only
-                candidates = find_songs_by_title(title)
-                if not candidates:
-                    return f"No songs found with title '{title}'."
-                if len(candidates) == 1:
-                    return self.playlists.add_song(candidates[0])
-                # Keep up to top 10 candidates for selection
-                self._pending_additions = candidates
-                return "Multiple matches: <br>" + "<br>".join([f"{i+1}. {c['artist']} : {c['title']}" for i, c in enumerate(candidates)]) + "<br>Use '/pl choose [number]' to select. This option is a one-time use."
-        elif action == "remove":
-            artist, title = self._parse_song_spec(arg)
-            return self.playlists.remove_song(artist, title)
-        elif action in ("choose"):
-            if not self._pending_additions:
-                return self._pl_help()
+            return self.playlists.add_song(arg)
+        elif action == "choose":
             try:
                 idx = int(arg) - 1
             except ValueError:
                 return "Please provide a valid number, e.g., '/pl choose 1'."
-            if idx < 0 or idx >= len(self._pending_additions):
-                return f"Please choose a number between 1 and {len(self._pending_additions)}."
-            song = self._pending_additions[idx]
-            # Clear pending to avoid accidental reuse
-            self._pending_additions = None
-                # If song is a string, split into artist/title
-            if isinstance(song, str):
-                if " - " in song:
-                    artist, title = song.split(" - ", 1)
-                else:
-                    artist, title = None, song
-                return self.playlists.add_song({"artist": artist, "title": title, "id": f"{artist}-{title}"})
-            
-            # Otherwise assume dict with artist/title
-            return self.playlists.add_song(song)
-        elif action == "view":
-            items = self.playlists.view(arg or None)
-            if not items:
-                return "Playlist is empty."
-            return "<br>".join([f"{i+1}. {s['artist']} - {s['title']}" for i, s in enumerate(items)])
-        elif action == "clear":
-            return self.playlists.clear(arg or None)
+            return self.playlists.choose_song(idx)
+        elif action == "remove":
+            return self.playlists.remove_song(arg)
+        # Misc
+        elif action == "help":
+            return self._pl_help()
         else:
             return self._pl_help()
 
     def _pl_help(self) -> str:
         help_text = (
             "Playlist commands:"
-            "<br> - /pl use [playlist name]   (create/switch playlist)"
+            "<br> - /pl create [playlist name]   (create playlist)"
+            "<br> - /pl switch [playlist name]   (switch to existing or create new playlist)"
             "<br> - /pl add [artist]: [song title]"
             "<br> - /pl add [song title]   (disambiguate if needed with '/pl choose a number from the list')"
             "<br> - /pl remove [artist]: [song title]"
-            "<br> - /pl view [playlist name]"
-            "<br> - /pl clear [plalylist name]"
+            "<br> - /pl view [playlist name] or none for current"
+            "<br> - /pl clear [playlist name] or none for current"
             "<br> - /pl choose [index of the list of songs]"
         )
         return help_text
@@ -182,13 +157,13 @@ class MusicCRS(Agent):
         return artist.strip(), title.strip()
 
     def _info(self):
-        return """I am MusicCRS, a conversational recommender system for music. 
-                I can help you create playlists and recommend songs. 
-                You can ask me to add or remove songs from your playlist, view your current playlist, or clear it. 
-                You can also ask me for music recommendations based on your mood or preferences. 
-                To get started, you can use commands like '/ask_llm <your prompt>' to interact with a large language model, or '/options' to see some example options.  
-                For playlist management, use commands starting with '/pl'. Type '/pl' for help on playlist commands.
-                Type '/quit' to end the conversation.
+        return """   I am MusicCRS, a conversational recommender system for music. 
+                <br> I can help you create playlists and recommend songs. 
+                <br> You can ask me to add or remove songs from your playlist, view your current playlist, or clear it. 
+                <br> You can also ask me for music recommendations based on your mood or preferences. 
+                <br> To get started, you can use commands like '/ask_llm <your prompt>' to interact with a large language model, or '/options' to see some example options.  
+                <br> For playlist management, use commands starting with '/pl'. Type '/pl help' for help on playlist commands.
+                <br> Type '/quit' to end the conversation.
                 """
 
     def _options(self, options: list[str]) -> str:

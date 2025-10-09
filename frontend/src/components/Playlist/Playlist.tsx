@@ -35,6 +35,7 @@ export default function Playlist() {
   const [currentPlaylist, setCurrentPlaylist] = useState<string>(""); // Currently selected playlist
   const [playlistName, setPlaylistName] = useState("");               // Input for creating a new playlist
   const [song, setSong] = useState("");                               // Input for adding a new song
+  const [playlistCounts, setPlaylistCounts] = useState<Record<string, number>>({}); // Per-playlist song counts
 
   // Keep a ref of currentPlaylist to use inside callbacks
   const currentPlaylistRef = useRef(currentPlaylist);
@@ -57,11 +58,26 @@ export default function Playlist() {
             return { artist, title };
           });
           setPlaylist(songs); // Update playlist state
+          // Update count for the active playlist
+          if (currentPlaylistRef.current) {
+            setPlaylistCounts((prev) => ({
+              ...prev,
+              [currentPlaylistRef.current]: songs.length,
+            }));
+          }
           break;
 
         case "playlists": // When we receive a list of playlist names
           const playlistList = response.data as string[];
           setPlaylists(playlistList);
+          // Ensure counts object has keys for all playlists (keep existing counts)
+          setPlaylistCounts((prev) => {
+            const next = { ...prev } as Record<string, number>;
+            for (const name of playlistList) if (!(name in next)) next[name] = next[name] ?? 0;
+            // Remove counts for playlists that no longer exist
+            for (const key of Object.keys(next)) if (!playlistList.includes(key)) delete next[key];
+            return next;
+          });
 
           // If no playlist is selected, select the first one
           if (!currentPlaylistRef.current && playlistList.length > 0) {
@@ -81,11 +97,21 @@ export default function Playlist() {
         case "added": // Song added
           viewPlaylists(); // Refresh playlists
           if (currentPlaylistRef.current) viewPlaylist(currentPlaylistRef.current);
+          // Optimistically bump count for current playlist
+          if (currentPlaylistRef.current) {
+            const name = currentPlaylistRef.current;
+            setPlaylistCounts((prev) => ({ ...prev, [name]: (prev[name] ?? 0) + 1 }));
+          }
           break;
 
         case "removed": // Song removed
           if (currentPlaylistRef.current) viewPlaylist(currentPlaylistRef.current);
           viewPlaylists();
+          // Optimistically decrement count for current playlist
+          if (currentPlaylistRef.current) {
+            const name = currentPlaylistRef.current;
+            setPlaylistCounts((prev) => ({ ...prev, [name]: Math.max(0, (prev[name] ?? 0) - 1) }));
+          }
           break;
 
         case "switched": // Playlist switched
@@ -101,6 +127,9 @@ export default function Playlist() {
           if (response.data) {
             setCurrentPlaylist(response.data);
             viewPlaylist(response.data);
+            // Initialize count to 0 for the new playlist
+            const name = response.data as string;
+            setPlaylistCounts((prev) => ({ ...prev, [name]: 0 }));
           }
           break;
 
@@ -109,6 +138,15 @@ export default function Playlist() {
           if (response.data === currentPlaylistRef.current) {
             setCurrentPlaylist("");
             setPlaylist([]);
+          }
+          // Remove count entry for deleted playlist
+          if (response.data) {
+            const name = response.data as string;
+            setPlaylistCounts((prev) => {
+              const next = { ...prev };
+              delete next[name];
+              return next;
+            });
           }
           break;
 
@@ -229,7 +267,7 @@ export default function Playlist() {
                       )}
                       {name}
                     </span>
-                    <span className="badge bg-primary ms-2">{playlist.length} Songs</span>
+                    <span className="badge bg-primary ms-2">{playlistCounts[name] ?? 0} Songs</span>
                     <button
                       className="btn btn-sm btn-outline-danger"
                       onClick={(e) => {

@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
-import { useSocket } from "./SocketContext"; // Reuse existing socket context
+import { useSocket } from "./SocketContext";
 import { PlaylistContextType } from "../types";
 
 const PlaylistContext = createContext<PlaylistContextType | undefined>(
@@ -7,15 +7,14 @@ const PlaylistContext = createContext<PlaylistContextType | undefined>(
 );
 
 export const PlaylistProvider = ({ children }: { children: React.ReactNode }) => {
-  const { socket } = useSocket(); // Get the single socket instance
-  const [lastResponse, setLastResponse] = useState<string | null>(null);
+  const { socket } = useSocket();
 
-  // Listen to playlist responses
   useEffect(() => {
     if (!socket) return;
 
-    const handleResponse = (data: { text: string }) => {
-      setLastResponse(data.text);
+    // Just relay the response - don't process it here
+    const handleResponse = (data: any) => {
+      console.log("PlaylistContext received response:", data);
     };
 
     socket.on("pl_response", handleResponse);
@@ -26,41 +25,53 @@ export const PlaylistProvider = ({ children }: { children: React.ReactNode }) =>
   }, [socket]);
 
   const createPlaylist = (playlistName: string) => {
+    console.log("Creating playlist:", playlistName);
     socket?.emit("pl_create", { playlistName });
   };
 
   const switchPlaylist = (playlistName: string) => {
+    console.log("Switching playlist:", playlistName);
     socket?.emit("pl_switch", { playlistName });
   };
 
-  const removePlaylist = (playlistName?: string) => {
+  const removePlaylist = (playlistName: string) => {
+    console.log("Removing playlist:", playlistName);
     socket?.emit("pl_remove_playlist", { playlistName });
   };
 
-  const addSong = (song: string, playlist?: string) => {
-    socket?.emit("pl_add", { song, playlist });
+  const addSong = (song: string, playlistName?: string) => {
+    console.log("Adding song:", song, "to playlist:", playlistName);
+    socket?.emit("pl_add", { song, playlistName });
   };
 
-  const removeSong = (song: string, playlist?: string) => {
-    socket?.emit("pl_remove", { song, playlist });
+  const removeSong = (artist: string, title: string) => {
+    console.log("Removing song:", artist, title);
+    socket?.emit("pl_remove", { artist, title });
   };
 
   const viewPlaylist = (playlistName?: string) => {
+    console.log("Viewing playlist:", playlistName);
     socket?.emit("pl_view", { playlistName });
   };
 
   const viewPlaylists = () => {
+    console.log("Viewing all playlists");
     socket?.emit("pl_view_playlists", {});
   };
 
   const clearPlaylist = (playlistName?: string) => {
+    console.log("Clearing playlist:", playlistName);
     socket?.emit("pl_clear", { playlistName });
   };
 
-  const onPlaylistResponse = (callback: (text: string) => void) => {
+  const onPlaylistResponse = (callback: (response: any) => void) => {
     if (!socket) return () => {};
 
-    const handler = (data: { text: string }) => callback(data.text);
+    const handler = (data: any) => {
+      console.log("Response handler called with:", data);
+      callback(data);
+    };
+    
     socket.on("pl_response", handler);
 
     return () => {
@@ -87,7 +98,6 @@ export const PlaylistProvider = ({ children }: { children: React.ReactNode }) =>
   );
 };
 
-// Custom hook to consume Playlist context
 export const usePlaylist = () => {
   const context = useContext(PlaylistContext);
   if (!context) {

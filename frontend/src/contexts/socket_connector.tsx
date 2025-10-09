@@ -54,8 +54,8 @@ export default function useSocketConnection(
       onAuthenticationRef.current &&
         onAuthenticationRef.current(success, error);
     });
-        newSocket.on("pl_response", ({ text }: { text: string }) => {
-      onPlaylistResponseRef.current?.(text);
+    newSocket.on("pl_response", (data: any) => {
+      onPlaylistResponseRef.current?.(data);
     });
 
     return () => {
@@ -95,28 +95,19 @@ export default function useSocketConnection(
     socket?.emit("register", { username, password });
   };
 
-  const onAuthentication = (
-    callback: (success: boolean, error: string) => void
-  ) => {
+  const onAuthentication = (callback: (success: boolean, error: string) => void) => {
     onAuthenticationRef.current = callback;
   };
 
   const createPlaylist = (playlistName: string) => socket?.emit("pl_create", { playlistName });
   const switchPlaylist = (playlistName: string) => socket?.emit("pl_switch", { playlistName });
   const removePlaylist = (playlistName: string) => socket?.emit("pl_remove_playlist", { playlistName });
-  const addSong = (song: any, playlistName?: string) =>
-    socket?.emit("pl_add", { song, playlistName });
-  const removeSong = (artist: string, title: string) =>
-    socket?.emit("pl_remove", { artist, title });
-  const viewPlaylist = (playlistName?: string) =>
-    socket?.emit("pl_view", { playlistName });
-  const viewPlaylists = () =>
-    socket?.emit("pl_view_playlists", {});
-  const clearPlaylist = (playlistName?: string) =>
-    socket?.emit("pl_clear", { playlistName });
-  const onPlaylistResponse = (callback: (text: string) => void) => {
-    onPlaylistResponseRef.current = callback;
-  };
+  const addSong = (song: any, playlistName?: string) => socket?.emit("pl_add", { song, playlistName });
+  const removeSong = (artist: string, title: string) => socket?.emit("pl_remove", { artist, title });
+  const viewPlaylist = (playlistName?: string) => socket?.emit("pl_view", { playlistName });
+  const viewPlaylists = () => socket?.emit("pl_view_playlists", {});
+  const clearPlaylist = (playlistName?: string) => socket?.emit("pl_clear", { playlistName });
+  const onPlaylistResponse = (callback: (text: string) => void) => { onPlaylistResponseRef.current = callback; };
 
   return {
     socket,

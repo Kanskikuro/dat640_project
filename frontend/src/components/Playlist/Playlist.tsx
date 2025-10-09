@@ -1,9 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback, useRef } from "react";
 import {
   MDBCard,
   MDBCardHeader,
   MDBCardBody,
-  MDBCardFooter,
   MDBIcon,
   MDBBtn,
   MDBInput,
@@ -11,8 +10,14 @@ import {
 import { usePlaylist } from "../../contexts/PlaylistContext";
 import "../ChatBox/ChatBox.css";
 
+// improvement :  include disambiguation suggestion 
+
+
+// Define the Song type for TypeScript
+type Song = { artist: string; title: string };
 
 export default function Playlist() {
+  // Context functions for managing playlists and songs
   const {
     addSong,
     removeSong,
@@ -23,100 +28,140 @@ export default function Playlist() {
     viewPlaylists,
     viewPlaylist,
   } = usePlaylist();
-type Song = { artist: string; title: string };
-  
-  const [playlist, setPlaylist] = useState<Song[]>([]);
-  const [playlistName, setPlaylistName] = useState("");
-  
-  const [playlists, setPlaylists] = useState<string[]>([]);
-  const [currentPlaylist, setCurrentPlaylist] = useState<string>("");
-  const [song, setsong] = useState("");
 
+  // State hooks
+  const [playlist, setPlaylist] = useState<Song[]>([]);               // Songs in the currently selected playlist
+  const [playlists, setPlaylists] = useState<string[]>([]);           // List of playlist names
+  const [currentPlaylist, setCurrentPlaylist] = useState<string>(""); // Currently selected playlist
+  const [playlistName, setPlaylistName] = useState("");               // Input for creating a new playlist
+  const [song, setSong] = useState("");                               // Input for adding a new song
 
-  // Listen for playlist content responses
-useEffect(() => {
-  const unsubscribe = onPlaylistResponse((message) => {
+  // Keep a ref of currentPlaylist to use inside callbacks
+  const currentPlaylistRef = useRef(currentPlaylist);
+  useEffect(() => {
+    currentPlaylistRef.current = currentPlaylist;
+  }, [currentPlaylist]);
 
-  try {
-    // If the server sends JSON directly, no need to JSON.parse again
-    const data = message;
+  // Handle responses from the PlaylistContext
+  const handlePlaylistResponse = useCallback(
+    (response: any) => {
+      if (!response || typeof response !== "object") return;
 
-    if (Array.isArray(data)) {
-      if (data.length > 0 && typeof data[0] === "string") {
-        setPlaylists(data);
-      } else {
-        setPlaylist(data as Song[]);
+      switch (response.type) {
+        case "songs": // When we receive a list of songs
+          const songs = response.data.map((s: string) => {
+            const colonIndex = s.indexOf(":");
+            if (colonIndex === -1) return { artist: "", title: s.trim() };
+            const artist = s.substring(0, colonIndex).trim();
+            const title = s.substring(colonIndex + 1).trim();
+            return { artist, title };
+          });
+          setPlaylist(songs); // Update playlist state
+          break;
+
+        case "playlists": // When we receive a list of playlist names
+          const playlistList = response.data as string[];
+          setPlaylists(playlistList);
+
+          // If no playlist is selected, select the first one
+          if (!currentPlaylistRef.current && playlistList.length > 0) {
+            setCurrentPlaylist(playlistList[0]);
+          }
+
+          // If the current playlist was deleted, reset
+          if (
+            currentPlaylistRef.current &&
+            !playlistList.includes(currentPlaylistRef.current)
+          ) {
+            setCurrentPlaylist(playlistList[0] || "");
+            setPlaylist([]);
+          }
+          break;
+
+        case "added": // Song added
+          viewPlaylists(); // Refresh playlists
+          if (currentPlaylistRef.current) viewPlaylist(currentPlaylistRef.current);
+          break;
+
+        case "removed": // Song removed
+          if (currentPlaylistRef.current) viewPlaylist(currentPlaylistRef.current);
+          viewPlaylists();
+          break;
+
+        case "switched": // Playlist switched
+          if (response.data) {
+            setCurrentPlaylist(response.data);
+            viewPlaylist(response.data);
+          }
+          viewPlaylists();
+          break;
+
+        case "created": // New playlist created
+          viewPlaylists();
+          if (response.data) {
+            setCurrentPlaylist(response.data);
+            viewPlaylist(response.data);
+          }
+          break;
+
+        case "deleted": // Playlist deleted
+          viewPlaylists();
+          if (response.data === currentPlaylistRef.current) {
+            setCurrentPlaylist("");
+            setPlaylist([]);
+          }
+          break;
+
+        default: // Fallback: refresh playlists and songs
+          viewPlaylists();
+          if (currentPlaylistRef.current) viewPlaylist(currentPlaylistRef.current);
       }
-    } else {
-      console.warn("Unexpected playlist response format:", data);
-    }
-  } catch (e) {
-    console.error("Failed to parse playlist response:", message);
-  }
-});
+    },
+    [viewPlaylists, viewPlaylist]
+  );
 
-  viewPlaylists(); // request the playlists from server
+  // Subscribe to playlist responses
+  useEffect(() => {
+    const unsubscribe = onPlaylistResponse(handlePlaylistResponse);
+    viewPlaylists(); // Load initial playlists
+    return () => unsubscribe(); // Cleanup subscription on unmount
+  }, [onPlaylistResponse, handlePlaylistResponse, viewPlaylists]);
 
-  return typeof unsubscribe === "function" ? unsubscribe : () => {};
-}, [onPlaylistResponse, viewPlaylists]);
+  // Whenever the current playlist changes, load its songs
+  useEffect(() => {
+    setPlaylist([]); // Clear old songs
+    if (currentPlaylist) viewPlaylist(currentPlaylist); // Load new songs
+  }, [currentPlaylist, viewPlaylist]);
 
-  const handleRemovePlaylist = (name: string) => {
-    removePlaylist(name); 
-
-    const remainingPlaylists = playlists.filter(p => p !== name);
-
-    // Update the playlists state
-    setPlaylists(remainingPlaylists);
-
-    if (remainingPlaylists.length > 0) {
-      const nextPlaylist = remainingPlaylists[0];
-      switchPlaylist(nextPlaylist);
-      setCurrentPlaylist(nextPlaylist);
-      viewPlaylist(nextPlaylist);
-    } else {
-      setCurrentPlaylist("");
-      setPlaylist([]); // Clear songs
-    }
-
-    viewPlaylists(); // optional, if you want to sync from server
+  // Handlers for user interactions
+  const handleCreatePlaylist = () => {
+    const name = playlistName.trim();
+    if (!name) return;
+    createPlaylist(name);
+    setPlaylistName(""); // Clear input
   };
-
 
   const handleSwitchPlaylist = (name: string) => {
+    if (name === currentPlaylist) return;
     switchPlaylist(name);
-    setCurrentPlaylist(name);
-    viewPlaylist(name);
-    viewPlaylists();
   };
 
-  const handleCreatePlaylist = () => {
-    if (!playlistName) return;
-    createPlaylist(playlistName);
-    setCurrentPlaylist(playlistName);
-    viewPlaylist(playlistName);
-    viewPlaylists();
-    setPlaylistName("");
+  const handleRemovePlaylist = (name: string) => {
+    if (!window.confirm(`Delete playlist "${name}"?`)) return;
+    removePlaylist(name);
   };
 
   const handleAddSong = () => {
-    if (!currentPlaylist) {
-      alert("Select a playlist first!");
-      return;
-    }
-    if (!song) return;
-    addSong(song, currentPlaylist); 
-    viewPlaylist(currentPlaylist);
+    const songInput = song.trim();
+    if (!songInput || !currentPlaylist) return;
+    addSong(songInput, currentPlaylist);
+    setSong(""); // Clear input
   };
-  const handleRemoveSong = () => {
-  if (!currentPlaylist) {
-    alert("Select a playlist first!");
-    return;
-  }
-  if (!song) return;
-  removeSong(song, currentPlaylist); 
-  viewPlaylist(currentPlaylist);
-  setsong("");
-};
+
+  const handleRemoveSong = (artist: string, title: string) => {
+    if (!currentPlaylist) return;
+    removeSong(artist, title);
+  };
 
   return (
     <div className="chat-widget-content">
@@ -127,56 +172,71 @@ useEffect(() => {
       >
         <MDBCardHeader
           className="d-flex justify-content-between align-items-center p-3 bg-warning text-dark border-bottom-0"
-          style={{
-            borderTopLeftRadius: "15px",
-            borderTopRightRadius: "15px",
-          }}
+          style={{ borderTopLeftRadius: "15px", borderTopRightRadius: "15px" }}
         >
-          <p className="mb-0 fw-bold">Playlist</p>
-
+          <p className="mb-0 fw-bold">Playlist Manager</p>
         </MDBCardHeader>
 
-        <MDBCardBody>
-          {/* Playlist creation input */}
-          <div className="mb-3 d-flex gap-2">
-            <MDBInput
-              label="Playlist name"
-              value={playlistName}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-                setPlaylistName(e.target.value)
-              }
-              size="sm"
-            />
-            <MDBBtn size="sm" color="primary" onClick={handleCreatePlaylist}>
-              Create
-            </MDBBtn>
-          </div>
-          {/* Display all playlists */}
-          <div className="mb-3">
-            <h6>Playlists:</h6>
+        <MDBCardBody style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          {/* Playlists Section */}
+          <div className="mb-4">
+            <h6 className="fw-bold mb-2">
+              Your Playlists <span className="badge bg-primary ms-2">{playlists.length}</span>
+            </h6>
+
+            {/* Create new playlist input */}
+            <div className="d-flex gap-2 mb-2">
+              <MDBInput
+                label="Playlist name"
+                value={playlistName}
+                onChange={(e) => setPlaylistName(e.target.value)}
+                onKeyPress={(e) => e.key === "Enter" && handleCreatePlaylist()}
+                size="sm"
+              />
+              <MDBBtn
+                size="sm"
+                color="primary"
+                onClick={handleCreatePlaylist}
+                disabled={!playlistName.trim()}
+              >
+                <MDBIcon fas icon="plus" className="me-1" />
+                Create
+              </MDBBtn>
+            </div>
+
+            {/* Display playlists */}
             {playlists.length === 0 ? (
-              <p className="text-muted">No playlists yet.</p>
+              <div className="alert alert-info mb-0" role="alert">
+                <MDBIcon fas icon="info-circle" className="me-2" />
+                No playlists yet. Create one to get started!
+              </div>
             ) : (
               <ul className="list-group list-group-flush">
                 {playlists.map((name) => (
                   <li
                     key={name}
                     className={`list-group-item d-flex justify-content-between align-items-center ${
-                      name === currentPlaylist ? "bg-light fw-bold" : ""
+                      name === currentPlaylist ? "active" : ""
                     }`}
-                    style={{ cursor: "pointer" }}
                   >
-                    <span onClick={() => handleSwitchPlaylist(name)} style={{ flex: 1 }}>
+                    <span
+                      onClick={() => handleSwitchPlaylist(name)}
+                      style={{ flex: 1, cursor: "pointer" }}
+                      className="d-flex align-items-center"
+                    >
+                      {name === currentPlaylist && (
+                        <MDBIcon fas icon="music" className="me-2" />
+                      )}
                       {name}
-                      {name === currentPlaylist && <MDBIcon fas icon="check" className="ms-2" />}
                     </span>
+                    <span className="badge bg-primary ms-2">{playlist.length} Songs</span>
                     <button
-                      className="btn btn-sm btn-outline-danger ms-2"
-                      onClick={() => {
-                        handleRemovePlaylist(name); // You need to implement this in your context
-                        if (name === currentPlaylist) setCurrentPlaylist("");
-                          viewPlaylists(); // Refresh playlist list
+                      className="btn btn-sm btn-outline-danger"
+                      onClick={(e) => {
+                        e.stopPropagation(); // Prevent switching playlist when clicking delete
+                        handleRemovePlaylist(name);
                       }}
+                      title="Delete playlist"
                     >
                       <MDBIcon fas icon="trash" />
                     </button>
@@ -186,52 +246,74 @@ useEffect(() => {
             )}
           </div>
 
+          {/* Songs Section */}
+          {currentPlaylist && (
+            <div className="mb-3">
+              <h6 className="fw-bold mb-2">
+                Songs in "{currentPlaylist}" <span className="badge bg-primary ms-2">{playlist.length}</span>
+              </h6>
 
-          {/* Display songs in the current playlist */}
-          <div className="mb-3">
-            <h6>Songs in playlist "{currentPlaylist}":</h6>
-            {playlist.length === 0 ? (
-              <p className="text-muted">No songs added yet.</p>
-            ) : (
-              <ul className="list-group list-group-flush">
-                {playlist.map((item, index) => (
-                  <li
-                    key={index}
-                    className="list-group-item d-flex justify-content-between align-items-center"
-                  >
-                    <span>
-                      {item.artist} - {item.title}
-                    </span>
-                    <button
-                      className="btn btn-sm btn-outline-danger"
-                      onClick={() =>
-                        handleRemoveSong()
-                      }
+              {/* Add new song */}
+              <div className="d-flex gap-2 mb-3">
+                <MDBInput
+                  label="Artist : Title"
+                  value={song}
+                  onChange={(e) => setSong(e.target.value)}
+                  onKeyPress={(e) => e.key === "Enter" && handleAddSong()}
+                  size="sm"
+                  style={{ width: "30ch" }}
+                  placeholder="e.g. Kendrick Lamar : HUMBLE."
+                />
+                <MDBBtn
+                  size="sm"
+                  color="success"
+                  onClick={handleAddSong}
+                  disabled={!song.trim()}
+                >
+                  <MDBIcon fas icon="plus" className="me-1" />
+                  Add
+                </MDBBtn>
+              </div>
+
+              {/* Display songs */}
+              {playlist.length === 0 ? (
+                <div className="alert alert-secondary mb-0" role="alert">
+                  <MDBIcon fas icon="compact-disc" className="me-2" />
+                  No songs in this playlist yet.
+                </div>
+              ) : (
+                <ul className="list-group list-group-flush">
+                  {playlist.map((item, index) => (
+                    <li
+                      key={`${item.artist}-${item.title}-${index}`}
+                      className="list-group-item d-flex justify-content-between align-items-center"
                     >
-                      <MDBIcon fas icon="times" />
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {/* Add new song input */}
-          <div className="mb-3 d-flex gap-2">
-            <MDBInput
-              label="song"
-              value={song}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setsong(e.target.value)}
-              size="sm"
-            />
-            <MDBBtn size="sm" color="success" onClick={handleAddSong}>
-              Add Song
-            </MDBBtn>
-          </div>
-          </div>
-        </MDBCardBody>
+                      <span>
+                        <MDBIcon fas icon="music" className="me-2 text-muted" />
+                        <strong>{item.artist || "Unknown Artist"}</strong> : {item.title}
+                      </span>
+                      <button
+                        className="btn btn-sm btn-outline-danger"
+                        onClick={() => handleRemoveSong(item.artist, item.title)}
+                        title="Remove song"
+                      >
+                        <MDBIcon fas icon="times" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
 
-        <MDBCardFooter className="text-muted d-flex justify-content-end">
-          <p className="mb-0">{playlist.length} song(s)</p>
-        </MDBCardFooter>
+          {/* If no playlist selected */}
+          {!currentPlaylist && playlists.length > 0 && (
+            <div className="alert alert-warning" role="alert">
+              <MDBIcon fas icon="hand-pointer" className="me-2" />
+              Select a playlist to view and manage songs.
+            </div>
+          )}
+        </MDBCardBody>
       </MDBCard>
     </div>
   );

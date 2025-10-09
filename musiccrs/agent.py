@@ -8,11 +8,10 @@ from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.core.intent import Intent
 
 from db import create_db_and_load_mpd, configure_sqlite_once, ensure_indexes_once, find_song_in_db, find_songs_by_title
-from playlist import PlaylistManager
+from playlist import shared_playlists
 from llm import LLMClient
 from config import DB_PATH
 from dialoguekit.core.dialogue_act import DialogueAct
-from shared_playlist import shared_playlists
 _INTENT_OPTIONS = Intent("OPTIONS")
 
 
@@ -25,7 +24,6 @@ class MusicCRS(Agent):
         configure_sqlite_once()
         ensure_indexes_once()
         self.playlists = shared_playlists
-        self._pending_additions = None
 
     def welcome(self) -> None:
         """Sends the agent's welcome message."""
@@ -78,7 +76,8 @@ class MusicCRS(Agent):
             self.goodbye()
             return
         elif utterance.text.startswith("/pl"):
-            response = self._handle_playlist_command(utterance.text[4:].strip())
+            response = self._handle_playlist_command(
+                utterance.text[4:].strip())
         else:
             response = "I'm sorry, I don't understand that command."
 
@@ -109,43 +108,32 @@ class MusicCRS(Agent):
         action = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        if action  == "create":
+        # Playlist
+        if action == "create":
             return self.playlists.create_playlist(arg)
         elif action == "switch":
             return self.playlists.switch_playlist(arg)
+        elif action == "view":
+            items = self.playlists.view(arg or None)
+            if isinstance(items, str):
+                return items
+            return "<br>".join(f"{s['title']} : {s['artist']}" for s in items)
+
+        elif action == "clear":
+            return self.playlists.clear(arg or None)
+
+        # Song
         elif action == "add":
-            return self.playlists.add_song(arg, pending_list=self._pending_additions)
-        elif action == "remove":
-            return self.playlists.remove_song(arg)
+            return self.playlists.add_song(arg)
         elif action == "choose":
-            if not self._pending_additions:
-                return self._pl_help()
             try:
                 idx = int(arg) - 1
             except ValueError:
                 return "Please provide a valid number, e.g., '/pl choose 1'."
-            if idx < 0 or idx >= len(self._pending_additions):
-                return f"Please choose a number between 1 and {len(self._pending_additions)}."
-            song = self._pending_additions[idx]
-            # Clear pending to avoid accidental reuse
-            self._pending_additions = None
-                # If song is a string, split into artist/title
-            if isinstance(song, str):
-                if " - " in song:
-                    artist, title = song.split(" - ", 1)
-                else:
-                    artist, title = None, song
-                return self.playlists.add_song({"artist": artist, "title": title, "id": f"{artist}-{title}"})
-            
-            # Otherwise assume dict with artist/title
-            return self.playlists.add_song(song)
-        elif action == "view":
-            items = self.playlists.view(arg or None)
-            if not items:
-                return "Playlist is empty."
-            return "<br>".join([f"{i+1}. {s['artist']} - {s['title']}" for i, s in enumerate(items)])
-        elif action == "clear":
-            return self.playlists.clear(arg or None)
+            return self.playlists.choose_song(idx)
+        elif action == "remove":
+            return self.playlists.remove_song(arg)
+        # Misc
         elif action == "help":
             return self._pl_help()
         else:

@@ -32,12 +32,13 @@ export type UserMessage = {
 export type PlaylistContextType = {
   switchPlaylist: (playlistName: string) => void;
   createPlaylist: (playlistName: string) => void;
-  removePlaylist: (playlistName?: string) => void;
+  removePlaylist: (playlistName: string) => void;
   viewPlaylist: (playlistName?: string) => void;
   viewPlaylists: () => void;
   clearPlaylist: (playlistName?: string) => void;
-  onPlaylistResponse: (callback: (message: string) => void) => void;
 
-  addSong: (song: string, playlist?: string) => void;
-  removeSong: (song: string, playlist?: string) => void;
+  addSong: (song: string, playlistName?: string) => void;
+  removeSong: (artist: string, title: string) => void;
+
+  onPlaylistResponse: (callback: (response: any) => void) => () => void;
 };

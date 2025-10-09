@@ -1,10 +1,13 @@
 from dialoguekit.platforms import FlaskSocketPlatform
 from playlist import shared_playlists
 from agent import MusicCRS
+from events import set_emitter
 
 
 def run_server():
     platform = FlaskSocketPlatform(MusicCRS)
+    # Bridge Socket.IO emitter for modules (e.g., agent) to push UI updates
+    set_emitter(lambda event, payload: platform.socketio.emit(event, payload))
 
     @platform.socketio.on('pl_switch')
     def handle_switch(data):

@@ -13,6 +13,7 @@ from llm import LLMClient
 from config import DB_PATH
 from dialoguekit.core.dialogue_act import DialogueAct
 _INTENT_OPTIONS = Intent("OPTIONS")
+from events import emit as emit_event
 
 
 class MusicCRS(Agent):
@@ -21,6 +22,30 @@ class MusicCRS(Agent):
         super().__init__(id="MusicCRS")
         self._llm = LLMClient() if use_llm else None
         self.playlists = shared_playlists
+
+    # --- small helpers ---
+    def _emit_pl(self, event_type: str, data):
+        try:
+            emit_event("pl_response", {"type": event_type, "data": data})
+        except Exception:
+            pass
+
+    def _emit_songs_for_current(self):
+        cur = getattr(self.playlists, "_current", None)
+        if not cur:
+            return
+        items = self.playlists.view(cur)
+        if isinstance(items, list):
+            song_strings = [f"{s['artist']}:{s['title']}" for s in items]
+            self._emit_pl("songs", song_strings)
+
+    def _ask_llm(self, prompt: str) -> str:
+        if not self._llm:
+            return "LLM is disabled."
+        try:
+            return self._llm.ask(prompt)
+        except Exception as e:
+            return f"LLM error: {e}"
 
     def welcome(self) -> None:
         """Sends the agent's welcome message."""
@@ -87,57 +112,94 @@ class MusicCRS(Agent):
         )
 
     def _handle_playlist_command(self, command: str) -> str:
-        """
-            "Playlist commands:"
-            "<br> - /pl create [playlist name]   (create playlist)"
-            "<br> - /pl switch [playlist name]   (switch to existing or create new playlist)"
-            "<br> - /pl add [artist]: [song title]"
-            "<br> - /pl add [song title]   (disambiguate if needed with '/pl choose a number from the list')"
-            "<br> - /pl remove [artist]: [song title]"
-            "<br> - /pl view [playlist name] or none for current"
-            "<br> - /pl clear [playlist name] or none for current"
-            "<br> - /pl choose [index of the list of songs]"
-        """
-
+        """Playlist commands via chat (/pl ...). Emits UI updates over Socket.IO."""
         parts = command.split(" ", 1)
         if not parts:
             return self._pl_help()
         action = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        # Playlist
+        # Playlist ops
         if action == "create":
-            return self.playlists.create_playlist(arg)
-        elif action == "switch":
-            return self.playlists.switch_playlist(arg)
-        elif action == "view":
+            res = self.playlists.create_playlist(arg)
+            if res.startswith("Created"):
+                self._emit_pl("created", arg)
+            else:
+                self._emit_pl("switched", arg)
+            if hasattr(self.playlists, "view_playlists"):
+                self._emit_pl("playlists", self.playlists.view_playlists())
+            self._emit_songs_for_current()
+            return res
+
+        if action == "switch":
+            res = self.playlists.switch_playlist(arg)
+            self._emit_pl("switched", arg)
+            if hasattr(self.playlists, "view_playlists"):
+                self._emit_pl("playlists", self.playlists.view_playlists())
+            self._emit_songs_for_current()
+            return res
+
+        if action == "view":
             items = self.playlists.view(arg or None)
             if isinstance(items, str):
                 return items
+            # emit view for UI too
+            song_strings = [f"{s['artist']}:{s['title']}" for s in items]
+            self._emit_pl("songs", song_strings)
             return "<br>".join(f"{s['title']} : {s['artist']}" for s in items)
 
-        elif action == "clear":
-            return self.playlists.clear(arg or None)
+        if action == "clear":
+            res = self.playlists.clear(arg or None)
+            target = arg or getattr(self.playlists, "_current", None)
+            self._emit_pl("cleared", target)
+            if hasattr(self.playlists, "view_playlists"):
+                self._emit_pl("playlists", self.playlists.view_playlists())
+            self._emit_pl("songs", [])
+            return res
 
-        # Song
-        elif action == "add":
-            return self.playlists.add_song(arg)
-        elif action == "choose":
+        # Song ops
+        if action == "add":
+            res = self.playlists.add_song(arg)
+            # Multiple matches case: manager stores pending
+            pending = getattr(self.playlists, "_pending_additions", None)
+            if pending:
+                candidates = [{"artist": c["artist"], "title": c["title"]} for c in pending]
+                self._emit_pl("multiple_matches", candidates)
+                return res
+            # Otherwise, song added
+            self._emit_pl("added", arg)
+            self._emit_songs_for_current()
+            if hasattr(self.playlists, "view_playlists"):
+                self._emit_pl("playlists", self.playlists.view_playlists())
+            return res
+
+        if action == "choose":
             try:
                 idx = int(arg) - 1
             except ValueError:
                 return "Please provide a valid number, e.g., '/pl choose 1'."
-            return self.playlists.choose_song(idx)
-        elif action == "remove":
-            return self.playlists.remove_song(arg)
-        # Misc
-        elif action == "help":
-            return self._pl_help()
-        else:
-            return self._pl_help()
+            res = self.playlists.choose_song(idx)
+            if res.startswith("Added"):
+                self._emit_pl("added", res)
+            self._emit_songs_for_current()
+            if hasattr(self.playlists, "view_playlists"):
+                self._emit_pl("playlists", self.playlists.view_playlists())
+            return res
+
+        if action == "remove":
+            res = self.playlists.remove_song(arg)
+            if res.startswith("Removed"):
+                self._emit_pl("removed", arg)
+            self._emit_songs_for_current()
+            if hasattr(self.playlists, "view_playlists"):
+                self._emit_pl("playlists", self.playlists.view_playlists())
+            return res
+
+        # Help / unknown
+        return self._pl_help()
 
     def _pl_help(self) -> str:
-        help_text = (
+        return (
             "Playlist commands:"
             "<br> - /pl create [playlist name]   (create playlist)"
             "<br> - /pl switch [playlist name]   (switch to existing or create new playlist)"
@@ -145,10 +207,9 @@ class MusicCRS(Agent):
             "<br> - /pl add [song title]   (disambiguate if needed with '/pl choose a number from the list')"
             "<br> - /pl remove [artist]: [song title]"
             "<br> - /pl view [playlist name] or none for current"
-            "<br> - /pl clear [playlist name] or none for current"
+            "<br> - /pl clear [playlist name] or none for current]"
             "<br> - /pl choose [index of the list of songs]"
         )
-        return help_text
 
     def _parse_song_spec(self, spec: str) -> tuple[str, str]:
         if ":" not in spec:

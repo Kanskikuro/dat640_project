@@ -15,7 +15,7 @@
 
 - [x] **R2.1:** Set up a web-based chat environment – 1p  
 - [x] **R2.2:** Add/remove songs, view/clear playlist, integrate Spotify Million Playlist Dataset – 4p  
-- [ ] **R2.3:** Extend UI to interact directly with the playlist – 3p (Depends on R2.1)  
+- [x] **R2.3:** Extend UI to interact directly with the playlist – 3p (Depends on R2.1)  
 - [x] **R2.4:** Provide way for users to learn system functionality – 1p  
 - [x] **R2.5:** Support multiple playlists – 2p (Depends on R2.2)  
 - [ ] **R2.6:** Display playlist cover image automatically – 2p (Depends on R2.1)  

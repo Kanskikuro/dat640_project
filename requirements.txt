@@ -6,7 +6,7 @@ certifi==2025.8.3
 charset-normalizer==3.4.3
 click==8.3.0
 colorama==0.4.6
-dialoguekit==0.1.0
+dialoguekit==0.1.1
 dotenv==0.9.9
 Flask==3.1.2
 Flask-SocketIO==5.5.1

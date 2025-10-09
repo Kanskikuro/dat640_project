@@ -13,6 +13,7 @@ from llm import LLMClient
 from config import DB_PATH
 from dialoguekit.core.dialogue_act import DialogueAct
 from spotify import SpotifyClient
+from collections import Counter
 
 _INTENT_OPTIONS = Intent("OPTIONS")
 
@@ -102,6 +103,7 @@ class MusicCRS(Agent):
         # /pl view [name]
         # /pl clear [name]
         # /pl choose <n>
+        # /pl summary|stats|info [name]
         """
 
         parts = command.split(" ", 1)
@@ -165,6 +167,87 @@ class MusicCRS(Agent):
             return "<br>".join([f"{i+1}. {s['artist']} - {s['title']}" for i, s in enumerate(items)])
         elif action == "clear":
             return self.playlists.clear(arg or None)
+        
+        # NEW: summary / stats / info
+        elif action in ("summary", "stats", "info"):
+            items = self.playlists.view(arg or None)
+            if not items:
+                return "Playlist is empty."
+
+            num_tracks = len(items)
+            # Count artists
+            artist_counts = Counter([(s.get("artist") or "Unknown").strip() for s in items])
+            num_artists = len([a for a in artist_counts.keys() if a and a != "Unknown"])
+
+            # Enrich with DB info where possible (duration, album, spotify_uri)
+            total_duration_ms = 0
+            album_counts = Counter()
+            track_rows = []
+            for s in items:
+                artist = s.get("artist") or "Unknown"
+                title = s.get("title") or s.get("track") or ""
+                info = None
+                try:
+                    info = get_track_info(artist, title)
+                except Exception:
+                    info = None
+                duration_ms = info.get("duration_ms") if info else None
+                album = info.get("album") if info else None
+                spotify_uri = info.get("spotify_uri") if info else None
+                if duration_ms:
+                    total_duration_ms += duration_ms
+                if album:
+                    album_counts[album] += 1
+                display_duration = self._format_duration(duration_ms)
+                track_rows.append({"artist": artist, "title": title, "duration": display_duration, "spotify_uri": spotify_uri})
+
+            avg_duration_ms = int(total_duration_ms / num_tracks) if num_tracks and total_duration_ms else None
+            num_albums = len([a for a in album_counts if a and a.strip()])
+
+            top_artists = artist_counts.most_common(5)
+            top_albums = album_counts.most_common(5)
+
+            # Build HTML summary
+            parts = []
+            parts.append(f"<div><h3>Playlist {self.playlists._current if not arg else arg} summary</h3>")
+            parts.append("<ul>")
+            parts.append(f"<li>Tracks: <strong>{num_tracks}</strong></li>")
+            parts.append(f"<li>Unique artists: <strong>{num_artists}</strong></li>")
+            parts.append(f"<li>Albums in playlist: <strong>{num_albums}</strong></li>")
+            if total_duration_ms:
+                parts.append(f"<li>Total duration: <strong>{self._format_duration(total_duration_ms)}</strong></li>")
+            else:
+                parts.append(f"<li>Total duration: <strong>Unknown</strong></li>")
+            if avg_duration_ms:
+                parts.append(f"<li>Average track length: <strong>{self._format_duration(avg_duration_ms)}</strong></li>")
+            parts.append("</ul>")
+
+            # Top artists
+            if top_artists:
+                parts.append("<strong>Top artists:</strong><br><ol>")
+                for a, cnt in top_artists[:5]:
+                    parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
+                parts.append("</ol>")
+
+            # Top albums
+            if top_albums:
+                parts.append("<strong>Top albums:</strong><br><ol>")
+                for a, cnt in top_albums[:5]:
+                    parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
+                parts.append("</ol>")
+
+            # Track listing table
+            parts.append("<strong>Tracks:</strong>")
+            parts.append("<table style='width:100%;border-collapse:collapse'>")
+            parts.append("<thead><tr><th style='text-align:left;padding:4px'>#</th><th style='text-align:left;padding:4px'>Artist</th><th style='text-align:left;padding:4px'>Title</th><th style='text-align:left;padding:4px'>Duration</th></tr></thead>")
+            parts.append("<tbody>")
+            for i, row in enumerate(track_rows):
+                spotify_link = f" <a href='{row['spotify_uri']}' target='_blank'>♫</a>" if row.get("spotify_uri") else ""
+                parts.append(f"<tr style='border-top:1px solid #eee'><td style='padding:4px'>{i+1}</td><td style='padding:4px'>{row['artist']}</td><td style='padding:4px'>{row['title']}{spotify_link}</td><td style='padding:4px'>{row['duration']}</td></tr>")
+            parts.append("</tbody></table></div>")
+
+            return "".join(parts)
+        
         else:
             return self._pl_help()
 

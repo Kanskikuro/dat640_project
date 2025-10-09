@@ -209,7 +209,7 @@ class MusicCRS(Agent):
 
             # Build HTML summary
             parts = []
-            parts.append(f"<div><h3>Playlist {self.playlists._current if not arg else arg} summary</h3>")
+            parts.append(f"<div><h3>Playlist {self.playlists._current} summary</h3>")
             parts.append("<ul>")
             parts.append(f"<li>Tracks: <strong>{num_tracks}</strong></li>")
             parts.append(f"<li>Unique artists: <strong>{num_artists}</strong></li>")

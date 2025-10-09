@@ -20,9 +20,6 @@ class MusicCRS(Agent):
         """Initialize MusicCRS agent."""
         super().__init__(id="MusicCRS")
         self._llm = LLMClient() if use_llm else None
-        create_db_and_load_mpd(DB_PATH)
-        configure_sqlite_once()
-        ensure_indexes_once()
         self.playlists = shared_playlists
 
     def welcome(self) -> None:

@@ -269,7 +269,7 @@ def get_artist_stats(artist: str) -> dict:
         WHERE s.artist = ? COLLATE NOCASE
         GROUP BY s.title
         ORDER BY popularity DESC, s.title COLLATE NOCASE ASC
-        LIMIT 3
+        LIMIT 10
         """,
         (artist,),
     )

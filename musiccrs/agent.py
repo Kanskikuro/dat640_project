@@ -299,14 +299,16 @@ class MusicCRS(Agent):
         return (
             "Playlist commands:"
             "<br> - /pl create [playlist name]   (create playlist)"
-            "<br> - /pl switch [playlist name]   (switch to existing or create new playlist)"
+            "<br> - /pl switch [playlist name]   (switch to existing)"
             "<br> - /pl add [artist]: [song title]"
             "<br> - /pl add [song title]   (disambiguate if needed with '/pl choose a number from the list')"
+            "<br> - /pl choose [index of the list of songs]"
             "<br> - /pl remove [artist]: [song title]"
             "<br> - /pl view [playlist name] or none for current"
             "<br> - /pl clear [playlist name] or none for current]"
-            "<br> - /pl choose [index of the list of songs]"
             "<br> - /pl summary|stats|info [playlist name] or none for current]"
+            
+            "<br> - Use /qa for information about track or artists"
         )
 
     def _parse_song_spec(self, spec: str) -> tuple[str, str]:

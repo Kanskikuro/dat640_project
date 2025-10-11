@@ -18,5 +18,5 @@
 #chatBox .card-body{
   overflow-y: auto;
   display: flex;
-  flex-direction: column;
+  flex-direction: column-reverse;
  }

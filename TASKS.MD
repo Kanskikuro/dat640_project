@@ -28,10 +28,10 @@
 
 - [x] **R3.1:** Add songs by title with disambiguation – 2p (Depends on R2.2)  
 - [x] **R3.2:** Rank disambiguation suggestions intelligently – 1p (Depends on R3.1)  
-- [ ] **R3.3:** Ask questions about tracks/artists (support 4 types) – 4p (Depends on R2.2)  
+- [x] **R3.3:** Ask questions about tracks/artists (support 4 types) – 4p (Depends on R2.2)  
 - [ ] **R3.4:** Ask questions about compilation albums – 1p (Depends on R2.2)  
-- [ ] **R3.5:** Provide textual/visual playlist summary – 2p (Depends on R2.2)  
-- [ ] **R3.6:** Play song or preview – 2p (Depends on R2.2)  
+- [x] **R3.5:** Provide textual/visual playlist summary – 2p (Depends on R2.2)  
+- [x] **R3.6:** Play song or preview – 2p (Depends on R2.2)  
 
 ---
 

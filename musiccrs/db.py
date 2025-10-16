@@ -285,6 +285,60 @@ def get_artist_stats(artist: str) -> dict:
         "top_tracks": top_tracks,
     }
 
+
+def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
+    """
+    Recommend songs based on co-occurrence in playlists using song IDs.
+    Input: list of {"id": str, "artist": str, "title": str}.
+    Returns: list of "ARTIST : TITLE (freq)".
+    """
+    if not song_entries:
+        return []
+
+    # Get all input song IDs
+    song_ids = [song["id"] for song in song_entries if "id" in song]
+    if not song_ids:
+        return []
+
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    cur = conn.cursor()
+
+    # Main query: find other songs that appear in the same playlists as the input songs
+    placeholders = ",".join("?" for _ in song_ids)
+    query = f"""
+        SELECT ps2.song_id, COUNT(*) AS freq
+        FROM playlist_songs ps1
+        JOIN playlist_songs ps2 ON ps1.playlist_id = ps2.playlist_id
+        WHERE ps1.song_id IN ({placeholders})
+          AND ps2.song_id NOT IN ({placeholders})
+        GROUP BY ps2.song_id
+        ORDER BY freq DESC
+        LIMIT ?
+    """
+
+    params = song_ids + song_ids + [limit]
+    cur.execute(query, params)
+    recommended_data = cur.fetchall()  # list of (song_id, freq)
+
+    if not recommended_data:
+        conn.close()
+        return []
+
+    # Map song IDs to titles/artists
+    recommended_ids = [row[0] for row in recommended_data]
+    placeholders = ",".join("?" for _ in recommended_ids)
+    cur.execute(f"SELECT id, title, artist FROM songs WHERE id IN ({placeholders})", recommended_ids)
+    songs_info = {row[0]: f"{row[2]} : {row[1]}" for row in cur.fetchall()}  # ARTIST : TITLE
+
+    # Combine with frequency
+    result = []
+    for song_id, freq in recommended_data:
+        if song_id in songs_info:
+            result.append(f"{songs_info[song_id]} ({freq})")
+
+    conn.close()
+    return result
+
 if __name__ == "__main__":
     configure_sqlite_once()
     ensure_indexes_once()

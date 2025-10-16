@@ -1,4 +1,4 @@
-from db import find_songs_by_title
+from db import find_songs_by_title, recommend_songs
 
 
 class PlaylistManager:
@@ -6,6 +6,10 @@ class PlaylistManager:
         self._playlists: dict[str, list[dict]] = {}
         self._current: str | None = None
         self._pending_additions: list[dict] | None = None
+
+        self.create_playlist("a")
+        self.add_song("kendrick lamar : humble.")
+    # Playlist functions
 
     def create_playlist(self, name: str):
         if name in self._playlists:
@@ -35,8 +39,8 @@ class PlaylistManager:
         print("switch :" + name)
         return f"Switched to '{name}'."
 
-    def view(self, playlist: str | None = None):
-        target = playlist or self._current
+    def view(self, playlist_name: str | None = None):
+        target = playlist_name or self._current
         if not target:
             return "No active playlist. Use '/pl create [name]' first."
 
@@ -47,23 +51,25 @@ class PlaylistManager:
     def view_playlists(self):
         return list(self._playlists.keys())
 
-    def clear(self, playlist: str | None = None):
-        target = playlist or self._current
+    def clear(self, playlist_name: str | None = None):
+        target = playlist_name or self._current
         if not target:
             return "No active playlist. Use '/pl create [name]' first."
 
         self._playlists[target] = []
-        print("clear :" + str(playlist))
+        print("clear :" + str(playlist_name))
         return f"Cleared playlist '{target}'."
 
-    def add_song(self, song_spec: str, playlist: str | None = None) -> str:
+    # Song functions
+
+    def add_song(self, song_spec: str, playlist_name: str | None = None) -> str:
         """
         Add a song to the playlist. Handles:
         - "Artist: Title" format
         - "Title" only (finds candidates in DB)
         - Multiple matches (requires choosing)
         """
-        target = playlist or self._current
+        target = playlist_name or self._current
         if not target:
             print("No active playlist. Use '/pl create [name]' first.")
             return "No active playlist. Use '/pl create [name]' first."
@@ -123,7 +129,7 @@ class PlaylistManager:
                     c in enumerate(self._pending_additions)]
             ) + "<br>Use '/pl choose [number]' to select."
 
-    def choose_song(self, idx: int, playlist: str | None = None) -> str:
+    def choose_song(self, idx: int, playlist_name: str | None = None) -> str:
         if not self._pending_additions:
             return "No pending songs to choose from."
 
@@ -131,7 +137,7 @@ class PlaylistManager:
             return f"Please choose a number between 1 and {len(self._pending_additions)}."
 
         song = self._pending_additions[idx]
-        target = playlist or self._current
+        target = playlist_name or self._current
         entries = self._playlists.setdefault(target, [])
         if any(e["id"] == song["id"] for e in entries):
             self._pending_additions = None
@@ -142,12 +148,12 @@ class PlaylistManager:
         print(f"Added '{song['artist']} : {song['title']} to '{target}.")
         return f"Added '{song['artist']} : {song['title']} to '{target}."
 
-    def remove_song(self, song_spec: str, playlist: str | None = None):
+    def remove_song(self, song_spec: str, playlist_name: str | None = None):
         """
         Remove a song by "Artist: Title" or just "Title".
         If only title is provided, remove first match.
         """
-        target = playlist or self._current
+        target = playlist_name or self._current
         if not target:
             return "No active playlist. Use '/pl create [name]' first."
 
@@ -174,5 +180,20 @@ class PlaylistManager:
         print("remove_song :" + str(song_spec))
         return f"Removed from '{target}': {removed['artist']} : {removed['title']}."
 
+    def recommend(self, playlist_name: str | None = None) -> str:
+        playlist_list = self._playlists.get(playlist_name or self._current, [])
+        if not playlist_list:
+            return "Playlist is empty or invalid."
+
+        # Filter valid songs
+        songs = [song for song in playlist_list if "artist" in song and "title" in song]
+        if not songs:
+            return "No valid songs in the playlist."
+
+        rec = recommend_songs(songs)
+        if rec:
+            return "Recommends:<br>" + "<br>".join(rec)
+        else:
+            return "No recommendations found."
 
 shared_playlists = PlaylistManager()

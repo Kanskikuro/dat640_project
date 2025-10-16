@@ -503,6 +503,8 @@ class MusicCRS(Agent):
                 <br> You can also ask me for music recommendations based on your mood or preferences. 
                 <br> To get started, you can use commands like '/ask_llm <your prompt>' to interact with a large language model, or '/options' to see some example options.  
                 <br> For playlist management, use commands starting with '/pl'. Type '/pl help' for help on playlist commands.
+                <br> For playing tracks, use commands starting with '/play'. Type '/play help' for help on playback commands.
+                <br> For questions about tracks or artists, use commands starting with '/qa'. Type
                 <br> Type '/quit' to end the conversation.
                 """
 

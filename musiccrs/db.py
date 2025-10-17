@@ -285,6 +285,65 @@ def get_artist_stats(artist: str) -> dict:
         "top_tracks": top_tracks,
     }
 
+
+def search_tracks_by_keywords(keywords: list[str], limit: int = 20) -> list[dict]:
+    """Search for tracks matching any of the given keywords.
+    
+    Searches in artist names, track titles, and album names.
+    Returns tracks sorted by popularity (playlist appearances).
+    
+    Args:
+        keywords: List of search terms (e.g., ["love", "sad", "ballad"])
+        limit: Maximum number of tracks to return
+        
+    Returns:
+        List of dicts with keys: id, artist, title, album, spotify_uri, popularity
+    """
+    if not keywords:
+        return []
+    
+    conn = sqlite3.connect(DB_PATH, timeout=30)
+    cur = conn.cursor()
+    
+    # Build WHERE clause with OR conditions for each keyword
+    # Search in artist, title, and album fields
+    conditions = []
+    params = []
+    for kw in keywords:
+        search_term = f"%{kw}%"
+        conditions.append("(s.artist LIKE ? COLLATE NOCASE OR s.title LIKE ? COLLATE NOCASE OR s.album LIKE ? COLLATE NOCASE)")
+        params.extend([search_term, search_term, search_term])
+    
+    where_clause = " OR ".join(conditions)
+    params.append(limit)
+    
+    query = f"""
+        SELECT s.id, s.artist, s.title, s.album, s.spotify_uri, COUNT(DISTINCT ps.playlist_id) AS popularity
+        FROM songs s
+        LEFT JOIN playlist_songs ps ON ps.song_id = s.id
+        WHERE {where_clause}
+        GROUP BY s.id, s.artist, s.title, s.album, s.spotify_uri
+        ORDER BY popularity DESC, s.artist COLLATE NOCASE ASC, s.title COLLATE NOCASE ASC
+        LIMIT ?
+    """
+    
+    cur.execute(query, params)
+    rows = cur.fetchall()
+    conn.close()
+    
+    return [
+        {
+            "id": row[0],
+            "artist": row[1],
+            "title": row[2],
+            "album": row[3] or "Unknown",
+            "spotify_uri": row[4],
+            "popularity": row[5] or 0
+        }
+        for row in rows
+    ]
+
+
 if __name__ == "__main__":
     configure_sqlite_once()
     ensure_indexes_once()

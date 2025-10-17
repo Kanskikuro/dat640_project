@@ -7,7 +7,7 @@ from dialoguekit.participant.agent import Agent
 from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.core.intent import Intent
 
-from db import get_track_info, get_artist_stats
+from db import get_track_info, get_artist_stats, search_tracks_by_keywords
 from spotify import SpotifyClient
 from collections import Counter
 from playlist import shared_playlists
@@ -118,19 +118,19 @@ class MusicCRS(Agent):
         )
 
     def _handle_playlist_command(self, command: str) -> str:
+        """Playlist commands via chat (/pl ...). Emits UI updates over Socket.IO.
+        
+        Supported:
+        - /pl create <name>
+        - /pl switch <name>
+        - /pl add <artist>: <title>
+        - /pl remove <artist>: <title>
+        - /pl view [name]
+        - /pl clear [name]
+        - /pl choose <n>
+        - /pl summary|stats|info [name]
+        - /pl auto <description>
         """
-        # Supported:
-        # /pl create <name>
-        # /pl switch <name>
-        # /pl add <artist>: <title>
-        # /pl remove <artist>: <title>
-        # /pl view [name]
-        # /pl clear [name]
-        # /pl choose <n>
-        # /pl summary|stats|info [name]
-        """
-
-        """Playlist commands via chat (/pl ...). Emits UI updates over Socket.IO."""
         parts = command.split(" ", 1)
         if not parts:
             return self._pl_help()
@@ -212,6 +212,9 @@ class MusicCRS(Agent):
             if hasattr(self.playlists, "view_playlists"):
                 self._emit_pl("playlists", self.playlists.view_playlists())
             return res
+        
+        if action == "auto":
+            return self._handle_auto_playlist(arg)
         
         if action in ("summary", "stats", "info"):
             # Determine which playlist we're summarizing
@@ -299,6 +302,93 @@ class MusicCRS(Agent):
         # Help / unknown
         return self._pl_help()
 
+    def _handle_auto_playlist(self, description: str) -> str:
+        """Automatically create a playlist from a natural language description.
+        
+        Args:
+            description: Natural language description (e.g., "sad love songs" or "energetic gym music")
+            
+        Returns:
+            HTML formatted response with playlist creation results
+        """
+        if not description or not description.strip():
+            return "Please provide a description for the playlist. Example: /pl auto sad love songs"
+        
+        description = description.strip()
+        
+        # Step 1: Extract keywords from user description (no LLM needed)
+        # Split the description into words and filter out short/common words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as'}
+        words = description.lower().split()
+        keywords = [w.strip() for w in words if len(w) > 2 and w not in stop_words]
+        
+        if not keywords:
+            # If all words were filtered out, just use the original words
+            keywords = [w.strip() for w in words if len(w) > 1]
+        
+        if not keywords:
+            return "Could not extract meaningful keywords from the description."
+        
+        # Step 2: Search database for matching tracks (fast: ~0.5-1 second)
+        tracks = search_tracks_by_keywords(keywords, limit=15)
+        
+        if not tracks:
+            return f"No tracks found matching '{description}'. Keywords searched: {', '.join(keywords)}"
+        
+        # Step 3: Create playlist with sanitized name
+        playlist_name = f"Auto: {description[:40]}"
+        create_result = self.playlists.create_playlist(playlist_name)
+        
+        if not create_result.startswith("Created") and not create_result.startswith("Switched"):
+            return f"Failed to create playlist: {create_result}"
+        
+        # Step 4: Add tracks to playlist (fast: ~1 second)
+        added_count = 0
+        skipped_count = 0
+        for track in tracks:
+            song_spec = f"{track['artist']}: {track['title']}"
+            result = self.playlists.add_song(song_spec)
+            if result.startswith("Added"):
+                added_count += 1
+            else:
+                skipped_count += 1
+        
+        # Step 5: Emit UI updates
+        if create_result.startswith("Created"):
+            self._emit_pl("created", playlist_name)
+        else:
+            self._emit_pl("switched", playlist_name)
+        
+        if hasattr(self.playlists, "view_playlists"):
+            self._emit_pl("playlists", self.playlists.view_playlists())
+        self._emit_songs_for_current()
+        
+        # Step 6: Build response
+        parts = []
+        parts.append(f"<div><h3>✨ Auto-generated Playlist</h3>")
+        parts.append(f"<p><strong>Description:</strong> {description}</p>")
+        parts.append(f"<p><strong>Keywords searched:</strong> {', '.join(keywords)}</p>")
+        parts.append(f"<p><strong>Playlist name:</strong> {playlist_name}</p>")
+        parts.append(f"<p><strong>Tracks added:</strong> {added_count}</p>")
+        if skipped_count > 0:
+            parts.append(f"<p><em>(Skipped {skipped_count} duplicates)</em></p>")
+        
+        # Show first 5 tracks
+        parts.append("<strong>Sample tracks:</strong><br>")
+        parts.append("<ol>")
+        for i, track in enumerate(tracks[:5]):
+            spotify_link = f" <a href='{track['spotify_uri']}' target='_blank'>♫</a>" if track.get('spotify_uri') else ""
+            parts.append(f"<li>{track['artist']} - {track['title']}{spotify_link}</li>")
+        parts.append("</ol>")
+        
+        if len(tracks) > 5:
+            parts.append(f"<p><em>...and {len(tracks) - 5} more tracks</em></p>")
+        
+        parts.append(f"<p>Use <code>/pl view</code> to see all tracks or <code>/pl summary</code> for full statistics.</p>")
+        parts.append("</div>")
+        
+        return "".join(parts)
+
     def _pl_help(self) -> str:
         return (
             "Playlist commands:"
@@ -311,6 +401,7 @@ class MusicCRS(Agent):
             "<br> - /pl view [playlist name] or none for current"
             "<br> - /pl clear [playlist name] or none for current]"
             "<br> - /pl summary|stats|info [playlist name] or none for current]"
+            "<br> - /pl auto [description]   (auto-create playlist from description, e.g., 'sad love songs')"
             
             "<br> - Use /qa for information about track or artists"
         )

@@ -361,7 +361,7 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
     songs_info = {row[0]: f"{row[2]} : {row[1]}" for row in cur.fetchall()}
 
     result = [
-        f"{songs_info[song_id]} ({freq})"
+        f"{songs_info[song_id]} (song appears in {freq} playlists)"
         for song_id, freq in recommended_data if song_id in songs_info
     ]
 

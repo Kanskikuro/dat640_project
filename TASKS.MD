@@ -39,7 +39,7 @@
 **Deadline:** w44 (Nov 2)  
 **Delivery:** In-person demo
 
-- [ ] **R4.1:** Recommend 3–5 additional songs based on playlist – 4p (Depends on R2.2)  
+- [x] **R4.1:** Recommend 3–5 additional songs based on playlist – 4p (Depends on R2.2)  
 - [ ] **R4.2:** Allow user to select which recommended songs to add – 1p (Depends on R4.1)  
 - [ ] **R4.3:** Explain why each recommended track was chosen – 2p (Depends on R4.1)  
 - [ ] **R4.4:** Create playlist from natural language description – 3p (Depends on R2.2)  

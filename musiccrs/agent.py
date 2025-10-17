@@ -335,24 +335,24 @@ class MusicCRS(Agent):
         target = parts[0].lower()
         rest = parts[1].strip()
 
-        if target == "track":
-            if ":" not in rest:
-                return "Please specify the song as 'Artist: Title'."
-            artist, title = self._parse_song_spec(rest)
-            info = get_track_info(artist, title)
-            if not info:
-                return f"Track not found: {artist} - {title}."
-            uri = info.get("spotify_uri")
-            if not uri:
-                return (
-                    f"No Spotify URI found for {artist} - {title}. Try '/qa track {artist}: {title} spotify' to check."
-                )
-            return self._render_player(uri, label=f"{artist} - {title}")
-
-        if target == "uri":
-            return self._render_player(rest, label="Spotify track")
-
-        return self._play_help()
+        match target:
+            case "track":
+                if ":" not in rest:
+                    return "Please specify the song as 'Artist: Title'."
+                artist, title = self._parse_song_spec(rest)
+                info = get_track_info(artist, title)
+                if not info:
+                    return f"Track not found: {artist} - {title}."
+                uri = info.get("spotify_uri")
+                if not uri:
+                    return (
+                        f"No Spotify URI found for {artist} - {title}. Try '/qa track {artist}: {title} spotify' to check."
+                    )
+                return self._render_player(uri, label=f"{artist} - {title}")
+            case "uri":
+                return self._render_player(rest, label="Spotify track")
+            case _:
+                return self._play_help()
 
     def _render_player(self, spotify_uri_or_url: str, label: str) -> str:
         link = self._spotify.open_spotify_track_url(spotify_uri_or_url) or "#"
@@ -404,82 +404,82 @@ class MusicCRS(Agent):
         target = parts[0].lower()
         rest = parts[1].strip()
 
-        if target == "track":
-            # Expect "<artist>: <title> <qtype>"
-            qtypes = {"album", "duration", "popularity", "spotify", "all"}
-            if " " not in rest:
-                return (
-                    "Please provide a question type. Example: /qa track Artist: Title album"
-                )
-            song_spec, qtype = rest.rsplit(" ", 1)
-            qtype = qtype.lower()
-            if qtype not in qtypes:
-                return (
-                    f"Unknown track question '{qtype}'. Try: album, duration, popularity, spotify, all."
-                )
-
-            if ":" not in song_spec:
-                return "Please specify the song as 'Artist: Title'."
-            artist, title = self._parse_song_spec(song_spec)
-            info = get_track_info(artist, title)
-            if not info:
-                return f"Track not found: {artist} - {title}."
-
-            answers = []
-            if qtype in ("album", "all"):
-                answers.append(f"Album: {info.get('album') or 'Unknown'}")
-            if qtype in ("duration", "all"):
-                answers.append(
-                    f"Duration: {self._format_duration(info.get('duration_ms'))}"
-                )
-            if qtype in ("popularity", "all"):
-                answers.append(
-                    f"Popularity: appears in {info.get('popularity', 0)} playlists"
-                )
-            if qtype in ("spotify", "all"):
-                uri = info.get("spotify_uri") or "N/A"
-                answers.append(f"Spotify URI: {uri}")
-
-            return "<br>".join(answers)
-
-        elif target == "artist":
-            # Expect "<artist> <qtype>"
-            qtypes = {"tracks", "albums", "top", "playlists", "all"}
-            if " " not in rest:
-                return (
-                    "Please provide a question type. Example: /qa artist Artist Name top"
-                )
-            artist, qtype = rest.rsplit(" ", 1)
-            qtype = qtype.lower()
-            if qtype not in qtypes:
-                return (
-                    f"Unknown artist question '{qtype}'. Try: tracks, albums, top, playlists, all."
-                )
-
-            stats = get_artist_stats(artist.strip())
-            answers = []
-            if qtype in ("tracks", "all"):
-                answers.append(f"Tracks in collection: {stats['num_tracks']}")
-            if qtype in ("albums", "all"):
-                answers.append(f"Albums in collection: {stats['num_albums']}")
-            if qtype in ("playlists", "all"):
-                answers.append(
-                    f"Artist appears in {stats['num_playlists']} playlists"
-                )
-            if qtype in ("top", "all"):
-                if stats["top_tracks"]:
-                    top = "<br>".join(
-                        [
-                            f"{i+1}. {t['title']} (in {t['popularity']} playlists)"
-                            for i, t in enumerate(stats["top_tracks"])
-                        ]
+        match target:
+            case "track":
+                # Expect "<artist>: <title> <qtype>"
+                qtypes = {"album", "duration", "popularity", "spotify", "all"}
+                if " " not in rest:
+                    return (
+                        "Please provide a question type. Example: /qa track Artist: Title album"
                     )
-                    answers.append(f"Top tracks:<br>{top}")
-                else:
-                    answers.append("Top tracks: N/A")
-            return "<br>".join(answers)
-        else:
-            return self._qa_help()
+                song_spec, qtype = rest.rsplit(" ", 1)
+                qtype = qtype.lower()
+                if qtype not in qtypes:
+                    return (
+                        f"Unknown track question '{qtype}'. Try: album, duration, popularity, spotify, all."
+                    )
+
+                if ":" not in song_spec:
+                    return "Please specify the song as 'Artist: Title'."
+                artist, title = self._parse_song_spec(song_spec)
+                info = get_track_info(artist, title)
+                if not info:
+                    return f"Track not found: {artist} - {title}."
+
+                answers = []
+                if qtype in ("album", "all"):
+                    answers.append(f"Album: {info.get('album') or 'Unknown'}")
+                if qtype in ("duration", "all"):
+                    answers.append(
+                        f"Duration: {self._format_duration(info.get('duration_ms'))}"
+                    )
+                if qtype in ("popularity", "all"):
+                    answers.append(
+                        f"Popularity: appears in {info.get('popularity', 0)} playlists"
+                    )
+                if qtype in ("spotify", "all"):
+                    uri = info.get("spotify_uri") or "N/A"
+                    answers.append(f"Spotify URI: {uri}")
+                return "<br>".join(answers)
+            
+            case "artist":
+                # Expect "<artist> <qtype>"
+                qtypes = {"tracks", "albums", "top", "playlists", "all"}
+                if " " not in rest:
+                    return (
+                        "Please provide a question type. Example: /qa artist Artist Name top"
+                    )
+                artist, qtype = rest.rsplit(" ", 1)
+                qtype = qtype.lower()
+                if qtype not in qtypes:
+                    return (
+                        f"Unknown artist question '{qtype}'. Try: tracks, albums, top, playlists, all."
+                    )
+
+                stats = get_artist_stats(artist.strip())
+                answers = []
+                if qtype in ("tracks", "all"):
+                    answers.append(f"Tracks in collection: {stats['num_tracks']}")
+                if qtype in ("albums", "all"):
+                    answers.append(f"Albums in collection: {stats['num_albums']}")
+                if qtype in ("playlists", "all"):
+                    answers.append(
+                        f"Artist appears in {stats['num_playlists']} playlists"
+                    )
+                if qtype in ("top", "all"):
+                    if stats["top_tracks"]:
+                        top = "<br>".join(
+                            [
+                                f"{i+1}. {t['title']} (in {t['popularity']} playlists)"
+                                for i, t in enumerate(stats["top_tracks"])
+                            ]
+                        )
+                        answers.append(f"Top tracks:<br>{top}")
+                    else:
+                        answers.append("Top tracks: N/A")
+                return "<br>".join(answers)
+            case _:
+                return self._qa_help()
 
     def _qa_help(self) -> str:
         return (

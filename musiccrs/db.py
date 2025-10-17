@@ -287,15 +287,14 @@ def get_artist_stats(artist: str) -> dict:
 
 
 def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
-    """
-    Recommend songs based on co-occurrence in playlists using song IDs.
+    """ Recommend songs based on co-occurrence in playlists using song IDs.
     Input: list of {"id": str, "artist": str, "title": str}.
+    
     Returns: list of "ARTIST : TITLE (freq)".
     """
     if not song_entries:
         return []
 
-    # Get all input song IDs
     song_ids = [song["id"] for song in song_entries if "id" in song]
     if not song_ids:
         return []
@@ -303,41 +302,72 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
     conn = sqlite3.connect(DB_PATH, timeout=30)
     cur = conn.cursor()
 
-    # Main query: find other songs that appear in the same playlists as the input songs
+    # Indexing for faster lookups
+    cur.executescript("""
+        CREATE INDEX IF NOT EXISTS idx_playlist_songs_song 
+        ON playlist_songs(song_id);
+        CREATE INDEX IF NOT EXISTS idx_playlist_songs_playlist 
+        ON playlist_songs(playlist_id);
+    """)
+    conn.commit()
+
+
     placeholders = ",".join("?" for _ in song_ids)
+    #Limit the number of playlists touched.
+    #   smaller limit = faster but less accurate. 
+    #   bigger  limit = more accurate but slower.  
+    #   LIMIT : 1000 - 2500 for 0.1-0.25% of db playlists
+    #   Order by random makes it non-biased because of playlist order
+    #   Order by playlist follower recommends based on mainstream taste
+    playlist_query = f"""
+        SELECT DISTINCT playlist_id
+        FROM playlist_songs
+        WHERE song_id IN ({placeholders})
+        ORDER BY RANDOM()
+        LIMIT 2000
+    """
+    cur.execute(playlist_query, song_ids)
+    playlist_ids = [row[0] for row in cur.fetchall()]
+    if not playlist_ids:
+        conn.close()
+        return []
+
+    placeholders_pl = ",".join("?" for _ in playlist_ids)
+    # Co-occurrence counting
     query = f"""
         SELECT ps2.song_id, COUNT(*) AS freq
-        FROM playlist_songs ps1
-        JOIN playlist_songs ps2 ON ps1.playlist_id = ps2.playlist_id
-        WHERE ps1.song_id IN ({placeholders})
+        FROM playlist_songs ps2
+        WHERE ps2.playlist_id IN ({placeholders_pl})
           AND ps2.song_id NOT IN ({placeholders})
         GROUP BY ps2.song_id
         ORDER BY freq DESC
         LIMIT ?
     """
-
-    params = song_ids + song_ids + [limit]
+    params = playlist_ids + song_ids + [limit]
     cur.execute(query, params)
-    recommended_data = cur.fetchall()  # list of (song_id, freq)
-
+    recommended_data = cur.fetchall()
     if not recommended_data:
         conn.close()
         return []
 
-    # Map song IDs to titles/artists
     recommended_ids = [row[0] for row in recommended_data]
     placeholders = ",".join("?" for _ in recommended_ids)
-    cur.execute(f"SELECT id, title, artist FROM songs WHERE id IN ({placeholders})", recommended_ids)
-    songs_info = {row[0]: f"{row[2]} : {row[1]}" for row in cur.fetchall()}  # ARTIST : TITLE
+    # Map song IDs to artist : song
+    cur.execute(f"""
+        SELECT id, title, artist 
+        FROM songs 
+        WHERE id IN ({placeholders})
+    """, recommended_ids)
+    songs_info = {row[0]: f"{row[2]} : {row[1]}" for row in cur.fetchall()}
 
-    # Combine with frequency
-    result = []
-    for song_id, freq in recommended_data:
-        if song_id in songs_info:
-            result.append(f"{songs_info[song_id]} ({freq})")
+    result = [
+        f"{songs_info[song_id]} ({freq})"
+        for song_id, freq in recommended_data if song_id in songs_info
+    ]
 
     conn.close()
     return result
+
 
 if __name__ == "__main__":
     configure_sqlite_once()

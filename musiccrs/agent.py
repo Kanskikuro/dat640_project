@@ -307,7 +307,7 @@ class MusicCRS(Agent):
             "<br> - /pl view [playlist name] or none for current"
             "<br> - /pl clear [playlist name] or none for current]"
             "<br> - /pl summary|stats|info [playlist name] or none for current]"
-            
+            "<br> - /pl recommend <playlist> (Item co-occurrence)"
             "<br> - Use /qa for information about track or artists"
         )
 

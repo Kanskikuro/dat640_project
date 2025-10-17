@@ -210,9 +210,12 @@ class MusicCRS(Agent):
                 return res
             
             case "summary" | "stats" | "info":
+                # Determine which playlist we're summarizing
+                target_playlist = arg.strip() if arg else self.playlists._current
                 items = self.playlists.view(arg or None)
-                if not items:
-                    return "Playlist is empty."
+                # Check if items is a string (error message) or empty list
+                if isinstance(items, str) or not items:
+                    return items if isinstance(items, str) else "Playlist is empty."
 
                 num_tracks = len(items)
                 # Count artists
@@ -249,7 +252,7 @@ class MusicCRS(Agent):
 
                 # Build HTML summary
                 parts = []
-                parts.append(f"<div><h3>Playlist {self.playlists._current} summary</h3>")
+                parts.append(f"<div><h3>Playlist '{target_playlist or '(current)'}' summary</h3>")
                 parts.append("<ul>")
                 parts.append(f"<li>Tracks: <strong>{num_tracks}</strong></li>")
                 parts.append(f"<li>Unique artists: <strong>{num_artists}</strong></li>")

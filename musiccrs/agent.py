@@ -25,7 +25,7 @@ class MusicCRS(Agent):
         self._spotify = SpotifyClient()
         self.playlists = shared_playlists
 
-    # --- small helpers ---
+    # --- small helpers to update frontend ---
     def _emit_pl(self, event_type: str, data):
         try:
             emit_event("pl_response", {"type": event_type, "data": data})
@@ -120,184 +120,183 @@ class MusicCRS(Agent):
     def _handle_playlist_command(self, command: str) -> str:
         """
         # Supported:
-        # /pl create <name>
-        # /pl switch <name>
+        # /pl create <playlist name or None>
+        # /pl switch <playlist name or None>
         # /pl add <artist>: <title>
         # /pl remove <artist>: <title>
-        # /pl view [name]
-        # /pl clear [name]
+        # /pl view [playlist name or None]
+        # /pl clear [playlist name or None]
         # /pl choose <n>
         # /pl summary|stats|info [name]
+        # /pl recommend <playlist name or None>
         """
 
         """Playlist commands via chat (/pl ...). Emits UI updates over Socket.IO."""
         parts = command.split(" ", 1)
-        if not parts:
-            return self._pl_help()
         action = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        # Playlist ops
-        if action == "create":
-            res = self.playlists.create_playlist(arg)
-            if res.startswith("Created"):
-                self._emit_pl("created", arg)
-            else:
-                self._emit_pl("switched", arg)
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            self._emit_songs_for_current()
-            return res
-
-        if action == "switch":
-            res = self.playlists.switch_playlist(arg)
-            self._emit_pl("switched", arg)
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            self._emit_songs_for_current()
-            return res
-
-        if action == "view":
-            items = self.playlists.view(arg or None)
-            if isinstance(items, str):
-                return items
-            # emit view for UI too
-            song_strings = [f"{s['artist']}:{s['title']}" for s in items]
-            self._emit_pl("songs", song_strings)
-            return "<br>".join(f"{s['title']} : {s['artist']}" for s in items)
-
-        if action == "clear":
-            res = self.playlists.clear(arg or None)
-            target = arg or getattr(self.playlists, "_current", None)
-            self._emit_pl("cleared", target)
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            self._emit_pl("songs", [])
-            return res
-
-        # Song ops
-        if action == "add":
-            res = self.playlists.add_song(arg)
-            # Multiple matches case: manager stores pending
-            pending = getattr(self.playlists, "_pending_additions", None)
-            if pending:
-                candidates = [{"artist": c["artist"], "title": c["title"]} for c in pending]
-                self._emit_pl("multiple_matches", candidates)
+        match action:
+            case "create":
+                res = self.playlists.create_playlist(arg)
+                self._emit_pl("created" if res.startswith("Created") else "switched", arg)
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                self._emit_songs_for_current()
                 return res
-            # Otherwise, song added
-            self._emit_pl("added", arg)
-            self._emit_songs_for_current()
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            return res
-        
-        if action == "choose":
-            try:
-                idx = int(arg) - 1
-            except ValueError:
-                return "Please provide a valid number, e.g., '/pl choose 1'."
-            res = self.playlists.choose_song(idx)
-            if res.startswith("Added"):
-                self._emit_pl("added", res)
-            self._emit_songs_for_current()
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            return res
 
-        if action == "remove":
-            res = self.playlists.remove_song(arg)
-            if res.startswith("Removed"):
-                self._emit_pl("removed", arg)
-            self._emit_songs_for_current()
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            return res
-        
-        if action in ("summary", "stats", "info"):
-            # Determine which playlist we're summarizing
-            target_playlist = arg.strip() if arg else self.playlists._current
+            case "switch":
+                res = self.playlists.switch_playlist(arg)
+                self._emit_pl("switched", arg)
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                self._emit_songs_for_current()
+                return res
+
+            case "view":
+                items = self.playlists.view(arg or None)
+                if isinstance(items, str):
+                    return items
+                # emit view for UI too
+                song_strings = [f"{s['artist']}:{s['title']}" for s in items]
+                self._emit_pl("songs", song_strings)
+                return "<br>".join(f"{s['artist']} : {s['title']}" for s in items)
+
+            case "clear":
+                res = self.playlists.clear(arg or None)
+                target = arg or getattr(self.playlists, "_current", None)
+                self._emit_pl("cleared", target)
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                self._emit_pl("songs", [])
+                return res
+
+            # Song ops
+            case "add":
+                res = self.playlists.add_song(arg)
+                # Multiple matches case: manager stores pending
+                pending = getattr(self.playlists, "_pending_additions", None)
+                if pending:
+                    candidates = [{"artist": c["artist"], "title": c["title"]} for c in pending]
+                    self._emit_pl("multiple_matches", candidates)
+                    return res
+                # Otherwise, song added
+                self._emit_pl("added", arg)
+                self._emit_songs_for_current()
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                return res
             
-            items = self.playlists.view(arg or None)
-            # Check if items is a string (error message) or empty list
-            if isinstance(items, str) or not items:
-                return items if isinstance(items, str) else "Playlist is empty."
-
-            num_tracks = len(items)
-            # Count artists
-            artist_counts = Counter([(s.get("artist") or "Unknown").strip() for s in items])
-            num_artists = len([a for a in artist_counts.keys() if a and a != "Unknown"])
-
-            # Enrich with DB info where possible (duration, album, spotify_uri)
-            total_duration_ms = 0
-            album_counts = Counter()
-            track_rows = []
-            for s in items:
-                artist = s.get("artist") or "Unknown"
-                title = s.get("title") or s.get("track") or ""
-                info = None
+            case "choose":
                 try:
-                    info = get_track_info(artist, title)
-                except Exception:
+                    idx = int(arg) - 1
+                except ValueError:
+                    return "Please provide a valid number, e.g., '/pl choose 1'."
+                res = self.playlists.choose_song(idx)
+                if res.startswith("Added"):
+                    self._emit_pl("added", res)
+                self._emit_songs_for_current()
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                return res
+
+            case "remove":
+                res = self.playlists.remove_song(arg)
+                if res.startswith("Removed"):
+                    self._emit_pl("removed", arg)
+                self._emit_songs_for_current()
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                return res
+            
+            case "summary" | "stats" | "info":
+                # Determine which playlist we're summarizing
+                target_playlist = arg.strip() if arg else self.playlists._current
+                items = self.playlists.view(arg or None)
+                # Check if items is a string (error message) or empty list
+                if isinstance(items, str) or not items:
+                    return items if isinstance(items, str) else "Playlist is empty."
+
+                num_tracks = len(items)
+                # Count artists
+                artist_counts = Counter([(s.get("artist") or "Unknown").strip() for s in items])
+                num_artists = len([a for a in artist_counts.keys() if a and a != "Unknown"])
+
+                # Enrich with DB info where possible (duration, album, spotify_uri)
+                total_duration_ms = 0
+                album_counts = Counter()
+                track_rows = []
+                for s in items:
+                    artist = s.get("artist") or "Unknown"
+                    title = s.get("title") or s.get("track") or ""
                     info = None
-                duration_ms = info.get("duration_ms") if info else None
-                album = info.get("album") if info else None
-                spotify_uri = info.get("spotify_uri") if info else None
-                if duration_ms:
-                    total_duration_ms += duration_ms
-                if album:
-                    album_counts[album] += 1
-                display_duration = self._format_duration(duration_ms)
-                track_rows.append({"artist": artist, "title": title, "duration": display_duration, "spotify_uri": spotify_uri})
+                    try:
+                        info = get_track_info(artist, title)
+                    except Exception:
+                        info = None
+                    duration_ms = info.get("duration_ms") if info else None
+                    album = info.get("album") if info else None
+                    spotify_uri = info.get("spotify_uri") if info else None
+                    if duration_ms:
+                        total_duration_ms += duration_ms
+                    if album:
+                        album_counts[album] += 1
+                    display_duration = self._format_duration(duration_ms)
+                    track_rows.append({"artist": artist, "title": title, "duration": display_duration, "spotify_uri": spotify_uri})
 
-            avg_duration_ms = int(total_duration_ms / num_tracks) if num_tracks and total_duration_ms else None
-            num_albums = len([a for a in album_counts if a and a.strip()])
+                avg_duration_ms = int(total_duration_ms / num_tracks) if num_tracks and total_duration_ms else None
+                num_albums = len([a for a in album_counts if a and a.strip()])
 
-            top_artists = artist_counts.most_common(5)
-            top_albums = album_counts.most_common(5)
+                top_artists = artist_counts.most_common(5)
+                top_albums = album_counts.most_common(5)
 
-            # Build HTML summary
-            parts = []
-            parts.append(f"<div><h3>Playlist '{target_playlist or '(current)'}' summary</h3>")
-            parts.append("<ul>")
-            parts.append(f"<li>Tracks: <strong>{num_tracks}</strong></li>")
-            parts.append(f"<li>Unique artists: <strong>{num_artists}</strong></li>")
-            parts.append(f"<li>Albums in playlist: <strong>{num_albums}</strong></li>")
-            if total_duration_ms:
-                parts.append(f"<li>Total duration: <strong>{self._format_duration(total_duration_ms)}</strong></li>")
-            else:
-                parts.append(f"<li>Total duration: <strong>Unknown</strong></li>")
-            if avg_duration_ms:
-                parts.append(f"<li>Average track length: <strong>{self._format_duration(avg_duration_ms)}</strong></li>")
-            parts.append("</ul>")
+                # Build HTML summary
+                parts = []
+                parts.append(f"<div><h3>Playlist '{target_playlist or '(current)'}' summary</h3>")
+                parts.append("<ul>")
+                parts.append(f"<li>Tracks: <strong>{num_tracks}</strong></li>")
+                parts.append(f"<li>Unique artists: <strong>{num_artists}</strong></li>")
+                parts.append(f"<li>Albums in playlist: <strong>{num_albums}</strong></li>")
+                if total_duration_ms:
+                    parts.append(f"<li>Total duration: <strong>{self._format_duration(total_duration_ms)}</strong></li>")
+                else:
+                    parts.append(f"<li>Total duration: <strong>Unknown</strong></li>")
+                if avg_duration_ms:
+                    parts.append(f"<li>Average track length: <strong>{self._format_duration(avg_duration_ms)}</strong></li>")
+                parts.append("</ul>")
 
-            # Top artists
-            if top_artists:
-                parts.append("<strong>Top artists:</strong><br><ol>")
-                for a, cnt in top_artists[:5]:
-                    parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
-                parts.append("</ol>")
+                # Top artists
+                if top_artists:
+                    parts.append("<strong>Top artists:</strong><br><ol>")
+                    for a, cnt in top_artists[:5]:
+                        parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
+                    parts.append("</ol>")
 
-            # Top albums
-            if top_albums:
-                parts.append("<strong>Top albums:</strong><br><ol>")
-                for a, cnt in top_albums[:5]:
-                    parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
-                parts.append("</ol>")
+                # Top albums
+                if top_albums:
+                    parts.append("<strong>Top albums:</strong><br><ol>")
+                    for a, cnt in top_albums[:5]:
+                        parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
+                    parts.append("</ol>")
 
-            # Track listing table
-            parts.append("<strong>Tracks:</strong>")
-            parts.append("<table style='width:100%;border-collapse:collapse'>")
-            parts.append("<thead><tr><th style='text-align:left;padding:4px'>#</th><th style='text-align:left;padding:4px'>Artist</th><th style='text-align:left;padding:4px'>Title</th><th style='text-align:left;padding:4px'>Duration</th></tr></thead>")
-            parts.append("<tbody>")
-            for i, row in enumerate(track_rows):
-                spotify_link = f" <a href='{row['spotify_uri']}' target='_blank'>♫</a>" if row.get("spotify_uri") else ""
-                parts.append(f"<tr style='border-top:1px solid #eee'><td style='padding:4px'>{i+1}</td><td style='padding:4px'>{row['artist']}</td><td style='padding:4px'>{row['title']}{spotify_link}</td><td style='padding:4px'>{row['duration']}</td></tr>")
-            parts.append("</tbody></table></div>")
+                # Track listing table
+                parts.append("<strong>Tracks:</strong>")
+                parts.append("<table style='width:100%;border-collapse:collapse'>")
+                parts.append("<thead><tr><th style='text-align:left;padding:4px'>#</th><th style='text-align:left;padding:4px'>Artist</th><th style='text-align:left;padding:4px'>Title</th><th style='text-align:left;padding:4px'>Duration</th></tr></thead>")
+                parts.append("<tbody>")
+                for i, row in enumerate(track_rows):
+                    spotify_link = f" <a href='{row['spotify_uri']}' target='_blank'>♫</a>" if row.get("spotify_uri") else ""
+                    parts.append(f"<tr style='border-top:1px solid #eee'><td style='padding:4px'>{i+1}</td><td style='padding:4px'>{row['artist']}</td><td style='padding:4px'>{row['title']}{spotify_link}</td><td style='padding:4px'>{row['duration']}</td></tr>")
+                parts.append("</tbody></table></div>")
 
-            return "".join(parts)
-
-        # Help / unknown
-        return self._pl_help()
+                return "".join(parts)
+            
+            case "recommend":
+                res = self.playlists.recommend(arg or None)
+                return res
+            
+            case _:
+                return self._pl_help()
 
     def _pl_help(self) -> str:
         return (
@@ -311,7 +310,7 @@ class MusicCRS(Agent):
             "<br> - /pl view [playlist name] or none for current"
             "<br> - /pl clear [playlist name] or none for current]"
             "<br> - /pl summary|stats|info [playlist name] or none for current]"
-            
+            "<br> - /pl recommend <playlist> (Item co-occurrence)"
             "<br> - Use /qa for information about track or artists"
         )
 
@@ -339,24 +338,24 @@ class MusicCRS(Agent):
         target = parts[0].lower()
         rest = parts[1].strip()
 
-        if target == "track":
-            if ":" not in rest:
-                return "Please specify the song as 'Artist: Title'."
-            artist, title = self._parse_song_spec(rest)
-            info = get_track_info(artist, title)
-            if not info:
-                return f"Track not found: {artist} - {title}."
-            uri = info.get("spotify_uri")
-            if not uri:
-                return (
-                    f"No Spotify URI found for {artist} - {title}. Try '/qa track {artist}: {title} spotify' to check."
-                )
-            return self._render_player(uri, label=f"{artist} - {title}")
-
-        if target == "uri":
-            return self._render_player(rest, label="Spotify track")
-
-        return self._play_help()
+        match target:
+            case "track":
+                if ":" not in rest:
+                    return "Please specify the song as 'Artist: Title'."
+                artist, title = self._parse_song_spec(rest)
+                info = get_track_info(artist, title)
+                if not info:
+                    return f"Track not found: {artist} - {title}."
+                uri = info.get("spotify_uri")
+                if not uri:
+                    return (
+                        f"No Spotify URI found for {artist} - {title}. Try '/qa track {artist}: {title} spotify' to check."
+                    )
+                return self._render_player(uri, label=f"{artist} - {title}")
+            case "uri":
+                return self._render_player(rest, label="Spotify track")
+            case _:
+                return self._play_help()
 
     def _render_player(self, spotify_uri_or_url: str, label: str) -> str:
         link = self._spotify.open_spotify_track_url(spotify_uri_or_url) or "#"
@@ -408,82 +407,82 @@ class MusicCRS(Agent):
         target = parts[0].lower()
         rest = parts[1].strip()
 
-        if target == "track":
-            # Expect "<artist>: <title> <qtype>"
-            qtypes = {"album", "duration", "popularity", "spotify", "all"}
-            if " " not in rest:
-                return (
-                    "Please provide a question type. Example: /qa track Artist: Title album"
-                )
-            song_spec, qtype = rest.rsplit(" ", 1)
-            qtype = qtype.lower()
-            if qtype not in qtypes:
-                return (
-                    f"Unknown track question '{qtype}'. Try: album, duration, popularity, spotify, all."
-                )
-
-            if ":" not in song_spec:
-                return "Please specify the song as 'Artist: Title'."
-            artist, title = self._parse_song_spec(song_spec)
-            info = get_track_info(artist, title)
-            if not info:
-                return f"Track not found: {artist} - {title}."
-
-            answers = []
-            if qtype in ("album", "all"):
-                answers.append(f"Album: {info.get('album') or 'Unknown'}")
-            if qtype in ("duration", "all"):
-                answers.append(
-                    f"Duration: {self._format_duration(info.get('duration_ms'))}"
-                )
-            if qtype in ("popularity", "all"):
-                answers.append(
-                    f"Popularity: appears in {info.get('popularity', 0)} playlists"
-                )
-            if qtype in ("spotify", "all"):
-                uri = info.get("spotify_uri") or "N/A"
-                answers.append(f"Spotify URI: {uri}")
-
-            return "<br>".join(answers)
-
-        elif target == "artist":
-            # Expect "<artist> <qtype>"
-            qtypes = {"tracks", "albums", "top", "playlists", "all"}
-            if " " not in rest:
-                return (
-                    "Please provide a question type. Example: /qa artist Artist Name top"
-                )
-            artist, qtype = rest.rsplit(" ", 1)
-            qtype = qtype.lower()
-            if qtype not in qtypes:
-                return (
-                    f"Unknown artist question '{qtype}'. Try: tracks, albums, top, playlists, all."
-                )
-
-            stats = get_artist_stats(artist.strip())
-            answers = []
-            if qtype in ("tracks", "all"):
-                answers.append(f"Tracks in collection: {stats['num_tracks']}")
-            if qtype in ("albums", "all"):
-                answers.append(f"Albums in collection: {stats['num_albums']}")
-            if qtype in ("playlists", "all"):
-                answers.append(
-                    f"Artist appears in {stats['num_playlists']} playlists"
-                )
-            if qtype in ("top", "all"):
-                if stats["top_tracks"]:
-                    top = "<br>".join(
-                        [
-                            f"{i+1}. {t['title']} (in {t['popularity']} playlists)"
-                            for i, t in enumerate(stats["top_tracks"])
-                        ]
+        match target:
+            case "track":
+                # Expect "<artist>: <title> <qtype>"
+                qtypes = {"album", "duration", "popularity", "spotify", "all"}
+                if " " not in rest:
+                    return (
+                        "Please provide a question type. Example: /qa track Artist: Title album"
                     )
-                    answers.append(f"Top tracks:<br>{top}")
-                else:
-                    answers.append("Top tracks: N/A")
-            return "<br>".join(answers)
-        else:
-            return self._qa_help()
+                song_spec, qtype = rest.rsplit(" ", 1)
+                qtype = qtype.lower()
+                if qtype not in qtypes:
+                    return (
+                        f"Unknown track question '{qtype}'. Try: album, duration, popularity, spotify, all."
+                    )
+
+                if ":" not in song_spec:
+                    return "Please specify the song as 'Artist: Title'."
+                artist, title = self._parse_song_spec(song_spec)
+                info = get_track_info(artist, title)
+                if not info:
+                    return f"Track not found: {artist} - {title}."
+
+                answers = []
+                if qtype in ("album", "all"):
+                    answers.append(f"Album: {info.get('album') or 'Unknown'}")
+                if qtype in ("duration", "all"):
+                    answers.append(
+                        f"Duration: {self._format_duration(info.get('duration_ms'))}"
+                    )
+                if qtype in ("popularity", "all"):
+                    answers.append(
+                        f"Popularity: appears in {info.get('popularity', 0)} playlists"
+                    )
+                if qtype in ("spotify", "all"):
+                    uri = info.get("spotify_uri") or "N/A"
+                    answers.append(f"Spotify URI: {uri}")
+                return "<br>".join(answers)
+            
+            case "artist":
+                # Expect "<artist> <qtype>"
+                qtypes = {"tracks", "albums", "top", "playlists", "all"}
+                if " " not in rest:
+                    return (
+                        "Please provide a question type. Example: /qa artist Artist Name top"
+                    )
+                artist, qtype = rest.rsplit(" ", 1)
+                qtype = qtype.lower()
+                if qtype not in qtypes:
+                    return (
+                        f"Unknown artist question '{qtype}'. Try: tracks, albums, top, playlists, all."
+                    )
+
+                stats = get_artist_stats(artist.strip())
+                answers = []
+                if qtype in ("tracks", "all"):
+                    answers.append(f"Tracks in collection: {stats['num_tracks']}")
+                if qtype in ("albums", "all"):
+                    answers.append(f"Albums in collection: {stats['num_albums']}")
+                if qtype in ("playlists", "all"):
+                    answers.append(
+                        f"Artist appears in {stats['num_playlists']} playlists"
+                    )
+                if qtype in ("top", "all"):
+                    if stats["top_tracks"]:
+                        top = "<br>".join(
+                            [
+                                f"{i+1}. {t['title']} (in {t['popularity']} playlists)"
+                                for i, t in enumerate(stats["top_tracks"])
+                            ]
+                        )
+                        answers.append(f"Top tracks:<br>{top}")
+                    else:
+                        answers.append("Top tracks: N/A")
+                return "<br>".join(answers)
+            case _:
+                return self._qa_help()
 
     def _qa_help(self) -> str:
         return (

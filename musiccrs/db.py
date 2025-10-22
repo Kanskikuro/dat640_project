@@ -30,6 +30,14 @@ def ensure_indexes_once():
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_playlist_songs_song_playlist ON playlist_songs(song_id, playlist_id)"
         )
+        # Add index on playlist names for fast auto-playlist search
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_playlists_name ON playlists(name COLLATE NOCASE)"
+        )
+        # Add index on playlist followers for fast sorting
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_playlists_followers ON playlists(num_followers DESC)"
+        )
         conn.commit()
         conn.close()
         _indexes_done = True
@@ -287,13 +295,13 @@ def get_artist_stats(artist: str) -> dict:
 
 
 def search_tracks_by_keywords(keywords: list[str], limit: int = 20) -> list[dict]:
-    """Search for tracks matching any of the given keywords.
+    """Search for tracks from playlists matching any of the given keywords.
     
-    Searches in artist names, track titles, and album names.
-    Returns tracks sorted by popularity (playlist appearances).
+    Searches ONLY in playlist names to find tracks from relevant playlists.
+    Prioritizes tracks from playlists with more followers.
     
     Args:
-        keywords: List of search terms (e.g., ["love", "sad", "ballad"])
+        keywords: List of search terms (e.g., ["love", "sad", "party"])
         limit: Maximum number of tracks to return
         
     Returns:
@@ -306,28 +314,47 @@ def search_tracks_by_keywords(keywords: list[str], limit: int = 20) -> list[dict
     cur = conn.cursor()
     
     # Build WHERE clause with OR conditions for each keyword
-    # Search in artist, title, and album fields
     conditions = []
     params = []
     for kw in keywords:
         search_term = f"%{kw}%"
-        conditions.append("(s.artist LIKE ? COLLATE NOCASE OR s.title LIKE ? COLLATE NOCASE OR s.album LIKE ? COLLATE NOCASE)")
-        params.extend([search_term, search_term, search_term])
+        conditions.append("name LIKE ? COLLATE NOCASE")
+        params.append(search_term)
     
     where_clause = " OR ".join(conditions)
-    params.append(limit)
     
-    query = f"""
-        SELECT s.id, s.artist, s.title, s.album, s.spotify_uri, COUNT(DISTINCT ps.playlist_id) AS popularity
-        FROM songs s
-        LEFT JOIN playlist_songs ps ON ps.song_id = s.id
+    # Step 1: Find top matching playlists (FAST - only searches playlist table)
+    # Increased from 5 to 20 playlists to get more variety
+    params_step1 = params.copy()
+    params_step1.append(20)
+    
+    playlist_query = f"""
+        SELECT pid FROM playlists
         WHERE {where_clause}
-        GROUP BY s.id, s.artist, s.title, s.album, s.spotify_uri
-        ORDER BY popularity DESC, s.artist COLLATE NOCASE ASC, s.title COLLATE NOCASE ASC
+        ORDER BY num_followers DESC
         LIMIT ?
     """
     
-    cur.execute(query, params)
+    cur.execute(playlist_query, params_step1)
+    playlist_ids = [row[0] for row in cur.fetchall()]
+    
+    if not playlist_ids:
+        conn.close()
+        return []
+    
+    # Step 2: Get songs from these playlists (FAST - direct lookup with IN clause)
+    placeholders = ','.join('?' * len(playlist_ids))
+    params_step2 = playlist_ids + [limit]
+    
+    songs_query = f"""
+        SELECT DISTINCT s.id, s.artist, s.title, s.album, s.spotify_uri
+        FROM songs s
+        INNER JOIN playlist_songs ps ON ps.song_id = s.id
+        WHERE ps.playlist_id IN ({placeholders})
+        LIMIT ?
+    """
+    
+    cur.execute(songs_query, params_step2)
     rows = cur.fetchall()
     conn.close()
     
@@ -338,7 +365,7 @@ def search_tracks_by_keywords(keywords: list[str], limit: int = 20) -> list[dict
             "title": row[2],
             "album": row[3] or "Unknown",
             "spotify_uri": row[4],
-            "popularity": row[5] or 0
+            "popularity": 0  # Not needed for this query type
         }
         for row in rows
     ]

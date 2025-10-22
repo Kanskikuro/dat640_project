@@ -317,14 +317,11 @@ class MusicCRS(Agent):
         description = description.strip()
         
         # Step 1: Extract keywords from user description (no LLM needed)
-        # Split the description into words and filter out short/common words
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as'}
+        # Split the description into words and filter out very short/common words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'it'}
         words = description.lower().split()
-        keywords = [w.strip() for w in words if len(w) > 2 and w not in stop_words]
-        
-        if not keywords:
-            # If all words were filtered out, just use the original words
-            keywords = [w.strip() for w in words if len(w) > 1]
+        # Keep words that are 2+ characters
+        keywords = [w.strip() for w in words if len(w) >= 2 and w not in stop_words]
         
         if not keywords:
             return "Could not extract meaningful keywords from the description."

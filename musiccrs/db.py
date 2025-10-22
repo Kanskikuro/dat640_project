@@ -324,7 +324,7 @@ def search_tracks_by_keywords(keywords: list[str], limit: int = 20) -> list[dict
     where_clause = " OR ".join(conditions)
     
     # Step 1: Find top matching playlists (FAST - only searches playlist table)
-    # Increased from 5 to 20 playlists to get more variety
+    # Increased from 5 to 100 playlists to get more variety
     params_step1 = params.copy()
     params_step1.append(20)
     

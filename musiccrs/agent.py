@@ -16,6 +16,11 @@ from config import DB_PATH
 _INTENT_OPTIONS = Intent("OPTIONS")
 from events import emit as emit_event
 
+# Import modular command handlers
+from auto_playlist import create_auto_playlist
+from qa_commands import handle_qa_track, handle_qa_artist, get_qa_help
+from playtrack import handle_play_track, handle_play_uri, render_player, get_play_help
+
 
 class MusicCRS(Agent):
     def __init__(self, use_llm=True):
@@ -217,87 +222,10 @@ class MusicCRS(Agent):
             return self._handle_auto_playlist(arg)
         
         if action in ("summary", "stats", "info"):
-            # Determine which playlist we're summarizing
-            target_playlist = arg.strip() if arg else self.playlists._current
-            
-            items = self.playlists.view(arg or None)
-            # Check if items is a string (error message) or empty list
-            if isinstance(items, str) or not items:
-                return items if isinstance(items, str) else "Playlist is empty."
-
-            num_tracks = len(items)
-            # Count artists
-            artist_counts = Counter([(s.get("artist") or "Unknown").strip() for s in items])
-            num_artists = len([a for a in artist_counts.keys() if a and a != "Unknown"])
-
-            # Enrich with DB info where possible (duration, album, spotify_uri)
-            total_duration_ms = 0
-            album_counts = Counter()
-            track_rows = []
-            for s in items:
-                artist = s.get("artist") or "Unknown"
-                title = s.get("title") or s.get("track") or ""
-                info = None
-                try:
-                    info = get_track_info(artist, title)
-                except Exception:
-                    info = None
-                duration_ms = info.get("duration_ms") if info else None
-                album = info.get("album") if info else None
-                spotify_uri = info.get("spotify_uri") if info else None
-                if duration_ms:
-                    total_duration_ms += duration_ms
-                if album:
-                    album_counts[album] += 1
-                display_duration = self._format_duration(duration_ms)
-                track_rows.append({"artist": artist, "title": title, "duration": display_duration, "spotify_uri": spotify_uri})
-
-            avg_duration_ms = int(total_duration_ms / num_tracks) if num_tracks and total_duration_ms else None
-            num_albums = len([a for a in album_counts if a and a.strip()])
-
-            top_artists = artist_counts.most_common(5)
-            top_albums = album_counts.most_common(5)
-
-            # Build HTML summary
-            parts = []
-            parts.append(f"<div><h3>Playlist '{target_playlist or '(current)'}' summary</h3>")
-            parts.append("<ul>")
-            parts.append(f"<li>Tracks: <strong>{num_tracks}</strong></li>")
-            parts.append(f"<li>Unique artists: <strong>{num_artists}</strong></li>")
-            parts.append(f"<li>Albums in playlist: <strong>{num_albums}</strong></li>")
-            if total_duration_ms:
-                parts.append(f"<li>Total duration: <strong>{self._format_duration(total_duration_ms)}</strong></li>")
-            else:
-                parts.append(f"<li>Total duration: <strong>Unknown</strong></li>")
-            if avg_duration_ms:
-                parts.append(f"<li>Average track length: <strong>{self._format_duration(avg_duration_ms)}</strong></li>")
-            parts.append("</ul>")
-
-            # Top artists
-            if top_artists:
-                parts.append("<strong>Top artists:</strong><br><ol>")
-                for a, cnt in top_artists[:5]:
-                    parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
-                parts.append("</ol>")
-
-            # Top albums
-            if top_albums:
-                parts.append("<strong>Top albums:</strong><br><ol>")
-                for a, cnt in top_albums[:5]:
-                    parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
-                parts.append("</ol>")
-
-            # Track listing table
-            parts.append("<strong>Tracks:</strong>")
-            parts.append("<table style='width:100%;border-collapse:collapse'>")
-            parts.append("<thead><tr><th style='text-align:left;padding:4px'>#</th><th style='text-align:left;padding:4px'>Artist</th><th style='text-align:left;padding:4px'>Title</th><th style='text-align:left;padding:4px'>Duration</th></tr></thead>")
-            parts.append("<tbody>")
-            for i, row in enumerate(track_rows):
-                spotify_link = f" <a href='{row['spotify_uri']}' target='_blank'>♫</a>" if row.get("spotify_uri") else ""
-                parts.append(f"<tr style='border-top:1px solid #eee'><td style='padding:4px'>{i+1}</td><td style='padding:4px'>{row['artist']}</td><td style='padding:4px'>{row['title']}{spotify_link}</td><td style='padding:4px'>{row['duration']}</td></tr>")
-            parts.append("</tbody></table></div>")
-
-            return "".join(parts)
+            return self.playlists.get_summary(
+                playlist=arg or None,
+                format_duration_func=self._format_duration
+            )
 
         # Help / unknown
         return self._pl_help()
@@ -305,103 +233,23 @@ class MusicCRS(Agent):
     def _handle_auto_playlist(self, description: str) -> str:
         """Automatically create a playlist from a natural language description.
         
+        Delegates to the modular auto_playlist.create_auto_playlist() function.
+        
         Args:
             description: Natural language description (e.g., "sad love songs" or "energetic gym music")
             
         Returns:
             HTML formatted response with playlist creation results
         """
-        if not description or not description.strip():
-            return "Please provide a description for the playlist. Example: /pl auto sad love songs"
-        
-        description = description.strip()
-        
-        # Step 1: Extract keywords from user description (no LLM needed)
-        # Split the description into words and filter out very short/common words
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'as', 'is', 'it'}
-        words = description.lower().split()
-        # Keep words that are 2+ characters
-        keywords = [w.strip() for w in words if len(w) >= 2 and w not in stop_words]
-        
-        if not keywords:
-            return "Could not extract meaningful keywords from the description."
-        
-        # Step 2: Search database for matching tracks (fast: ~0.5-1 second)
-        tracks = search_tracks_by_keywords(keywords, limit=15)
-        
-        if not tracks:
-            return f"No tracks found matching '{description}'. Keywords searched: {', '.join(keywords)}"
-        
-        # Step 3: Create playlist with sanitized name
-        playlist_name = f"Auto: {description[:40]}"
-        create_result = self.playlists.create_playlist(playlist_name)
-        
-        if not create_result.startswith("Created") and not create_result.startswith("Switched"):
-            return f"Failed to create playlist: {create_result}"
-        
-        # Step 4: Add tracks to playlist (fast: ~1 second)
-        added_count = 0
-        skipped_count = 0
-        for track in tracks:
-            song_spec = f"{track['artist']}: {track['title']}"
-            result = self.playlists.add_song(song_spec)
-            if result.startswith("Added"):
-                added_count += 1
-            else:
-                skipped_count += 1
-        
-        # Step 5: Emit UI updates
-        if create_result.startswith("Created"):
-            self._emit_pl("created", playlist_name)
-        else:
-            self._emit_pl("switched", playlist_name)
-        
-        if hasattr(self.playlists, "view_playlists"):
-            self._emit_pl("playlists", self.playlists.view_playlists())
-        self._emit_songs_for_current()
-        
-        # Step 6: Build response
-        parts = []
-        parts.append(f"<div><h3>✨ Auto-generated Playlist</h3>")
-        parts.append(f"<p><strong>Description:</strong> {description}</p>")
-        parts.append(f"<p><strong>Keywords searched:</strong> {', '.join(keywords)}</p>")
-        parts.append(f"<p><strong>Playlist name:</strong> {playlist_name}</p>")
-        parts.append(f"<p><strong>Tracks added:</strong> {added_count}</p>")
-        if skipped_count > 0:
-            parts.append(f"<p><em>(Skipped {skipped_count} duplicates)</em></p>")
-        
-        # Show first 5 tracks
-        parts.append("<strong>Sample tracks:</strong><br>")
-        parts.append("<ol>")
-        for i, track in enumerate(tracks[:5]):
-            spotify_link = f" <a href='{track['spotify_uri']}' target='_blank'>♫</a>" if track.get('spotify_uri') else ""
-            parts.append(f"<li>{track['artist']} - {track['title']}{spotify_link}</li>")
-        parts.append("</ol>")
-        
-        if len(tracks) > 5:
-            parts.append(f"<p><em>...and {len(tracks) - 5} more tracks</em></p>")
-        
-        parts.append(f"<p>Use <code>/pl view</code> to see all tracks or <code>/pl summary</code> for full statistics.</p>")
-        parts.append("</div>")
-        
-        return "".join(parts)
+        return create_auto_playlist(
+            description=description,
+            playlist_manager=self.playlists,
+            emit_pl_func=self._emit_pl
+        )
 
     def _pl_help(self) -> str:
-        return (
-            "Playlist commands:"
-            "<br> - /pl create [playlist name]   (create playlist)"
-            "<br> - /pl switch [playlist name]   (switch to existing)"
-            "<br> - /pl add [artist]: [song title]"
-            "<br> - /pl add [song title]   (disambiguate if needed with '/pl choose a number from the list')"
-            "<br> - /pl choose [index of the list of songs]"
-            "<br> - /pl remove [artist]: [song title]"
-            "<br> - /pl view [playlist name] or none for current"
-            "<br> - /pl clear [playlist name] or none for current]"
-            "<br> - /pl summary|stats|info [playlist name] or none for current]"
-            "<br> - /pl auto [description]   (auto-create playlist from description, e.g., 'sad love songs')"
-            
-            "<br> - Use /qa for information about track or artists"
-        )
+        """Return playlist command help text."""
+        return self.playlists.get_help()
 
     def _parse_song_spec(self, spec: str) -> tuple[str, str]:
         if ":" not in spec:
@@ -415,14 +263,15 @@ class MusicCRS(Agent):
         Play commands:
           - /play track <artist>: <title>
           - /play uri <spotify_track_uri_or_url>
-        Renders an HTML5 <audio> with preview if available, else a link.
+        
+        Delegates to modular playback_commands functions.
         """
         if not command:
-            return self._play_help()
+            return get_play_help()
 
         parts = command.split(None, 1)
         if len(parts) < 2:
-            return self._play_help()
+            return get_play_help()
 
         target = parts[0].lower()
         rest = parts[1].strip()
@@ -431,53 +280,23 @@ class MusicCRS(Agent):
             if ":" not in rest:
                 return "Please specify the song as 'Artist: Title'."
             artist, title = self._parse_song_spec(rest)
-            info = get_track_info(artist, title)
-            if not info:
-                return f"Track not found: {artist} - {title}."
-            uri = info.get("spotify_uri")
-            if not uri:
-                return (
-                    f"No Spotify URI found for {artist} - {title}. Try '/qa track {artist}: {title} spotify' to check."
-                )
-            return self._render_player(uri, label=f"{artist} - {title}")
+            return handle_play_track(artist, title, self._spotify, self._render_player)
 
         if target == "uri":
-            return self._render_player(rest, label="Spotify track")
+            return handle_play_uri(rest, self._render_player)
 
-        return self._play_help()
+        return get_play_help()
 
     def _render_player(self, spotify_uri_or_url: str, label: str) -> str:
-        link = self._spotify.open_spotify_track_url(spotify_uri_or_url) or "#"
-        preview = self._spotify.get_preview_url(spotify_uri_or_url)
-        if preview:
-            return (
-                f"<div><strong>Playing preview:</strong> {label}<br>"
-                f"<audio controls src=\"{preview}\" preload=\"none\"></audio>"
-                f"<br><a href=\"{link}\" target=\"_blank\">Open in Spotify</a></div>"
-            )
-        # Fallback: Spotify embed (30s preview UI) without requiring SDK or login
-        track_id = self._spotify.parse_spotify_track_id(spotify_uri_or_url)
-        if track_id:
-            embed = (
-                f"<iframe style=\"border-radius:12px\" "
-                f"src=\"https://open.spotify.com/embed/track/{track_id}\" "
-                f"width=\"100%\" height=\"80\" frameborder=\"0\" allow=\"autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture\" loading=\"lazy\"></iframe>"
-            )
-            return (
-                f"<div><strong>Preview:</strong> {label}<br>{embed}"
-                f"<br><a href=\"{link}\" target=\"_blank\">Open in Spotify</a></div>"
-            )
-        return (
-            f"<div>No preview available for {label}. "
-            f"<a href=\"{link}\" target=\"_blank\">Open in Spotify</a></div>"
-        )
+        """Render a player for a Spotify track.
+        
+        Delegates to modular playback_commands.render_player() function.
+        """
+        return render_player(spotify_uri_or_url, label, self._spotify)
 
     def _play_help(self) -> str:
-        return (
-            "Play commands:"
-            "<br> - /play track [Artist]: [Title]"
-            "<br> - /play uri [spotify track uri or open.spotify.com link]"
-        )
+        """Return playback command help text."""
+        return get_play_help()
 
     # --- QA commands ---
     def _handle_qa_command(self, command: str) -> str:
@@ -485,100 +304,39 @@ class MusicCRS(Agent):
         QA commands:
           - /qa track <artist>: <title> (album|duration|popularity|spotify|all)
           - /qa artist <artist> (tracks|albums|top|playlists|all)
+        
+        Delegates to modular qa_commands functions.
         """
         if not command:
-            return self._qa_help()
+            return get_qa_help()
 
         parts = command.split(None, 1)
         if len(parts) < 2:
-            return self._qa_help()
+            return get_qa_help()
 
         target = parts[0].lower()
         rest = parts[1].strip()
 
         if target == "track":
             # Expect "<artist>: <title> <qtype>"
-            qtypes = {"album", "duration", "popularity", "spotify", "all"}
             if " " not in rest:
-                return (
-                    "Please provide a question type. Example: /qa track Artist: Title album"
-                )
+                return "Please provide a question type. Example: /qa track Artist: Title album, duration, popularity, spotify, all"
             song_spec, qtype = rest.rsplit(" ", 1)
             qtype = qtype.lower()
-            if qtype not in qtypes:
-                return (
-                    f"Unknown track question '{qtype}'. Try: album, duration, popularity, spotify, all."
-                )
-
-            if ":" not in song_spec:
-                return "Please specify the song as 'Artist: Title'."
-            artist, title = self._parse_song_spec(song_spec)
-            info = get_track_info(artist, title)
-            if not info:
-                return f"Track not found: {artist} - {title}."
-
-            answers = []
-            if qtype in ("album", "all"):
-                answers.append(f"Album: {info.get('album') or 'Unknown'}")
-            if qtype in ("duration", "all"):
-                answers.append(
-                    f"Duration: {self._format_duration(info.get('duration_ms'))}"
-                )
-            if qtype in ("popularity", "all"):
-                answers.append(
-                    f"Popularity: appears in {info.get('popularity', 0)} playlists"
-                )
-            if qtype in ("spotify", "all"):
-                uri = info.get("spotify_uri") or "N/A"
-                answers.append(f"Spotify URI: {uri}")
-
-            return "<br>".join(answers)
-
+            return handle_qa_track(song_spec, qtype, self._parse_song_spec, self._format_duration)
         elif target == "artist":
             # Expect "<artist> <qtype>"
-            qtypes = {"tracks", "albums", "top", "playlists", "all"}
             if " " not in rest:
-                return (
-                    "Please provide a question type. Example: /qa artist Artist Name top"
-                )
+                return "Please provide a question type. Example: /qa artist Artist Name top, albums, tracks, playlists, all"
             artist, qtype = rest.rsplit(" ", 1)
             qtype = qtype.lower()
-            if qtype not in qtypes:
-                return (
-                    f"Unknown artist question '{qtype}'. Try: tracks, albums, top, playlists, all."
-                )
-
-            stats = get_artist_stats(artist.strip())
-            answers = []
-            if qtype in ("tracks", "all"):
-                answers.append(f"Tracks in collection: {stats['num_tracks']}")
-            if qtype in ("albums", "all"):
-                answers.append(f"Albums in collection: {stats['num_albums']}")
-            if qtype in ("playlists", "all"):
-                answers.append(
-                    f"Artist appears in {stats['num_playlists']} playlists"
-                )
-            if qtype in ("top", "all"):
-                if stats["top_tracks"]:
-                    top = "<br>".join(
-                        [
-                            f"{i+1}. {t['title']} (in {t['popularity']} playlists)"
-                            for i, t in enumerate(stats["top_tracks"])
-                        ]
-                    )
-                    answers.append(f"Top tracks:<br>{top}")
-                else:
-                    answers.append("Top tracks: N/A")
-            return "<br>".join(answers)
+            return handle_qa_artist(artist, qtype)
         else:
-            return self._qa_help()
+            return get_qa_help()
 
     def _qa_help(self) -> str:
-        return (
-            "QA commands:"
-            "<br> - /qa track [Artist]: [Title] (album|duration|popularity|spotify|all)"
-            "<br> - /qa artist [Artist] (tracks|albums|top|playlists|all)"
-        )
+        """Return QA command help text."""
+        return get_qa_help()
 
     def _format_duration(self, duration_ms: int | None) -> str:
         if not duration_ms or duration_ms <= 0:

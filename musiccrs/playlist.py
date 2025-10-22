@@ -1,4 +1,5 @@
-from db import find_songs_by_title
+from db import find_songs_by_title, get_track_info
+from collections import Counter
 
 
 class PlaylistManager:
@@ -173,6 +174,127 @@ class PlaylistManager:
         removed = entries.pop(idx)
         print("remove_song :" + str(song_spec))
         return f"Removed from '{target}': {removed['artist']} : {removed['title']}."
+
+    def get_summary(self, playlist: str | None = None, format_duration_func=None) -> str:
+        """Generate a detailed summary of a playlist.
+        
+        Args:
+            playlist: Optional playlist name (uses current if None)
+            format_duration_func: Function to format duration in ms
+            
+        Returns:
+            HTML formatted summary with statistics and track listing
+        """
+        # Default duration formatter if none provided
+        if format_duration_func is None:
+            def format_duration_func(duration_ms: int | None) -> str:
+                if not duration_ms or duration_ms <= 0:
+                    return "Unknown"
+                seconds = duration_ms // 1000
+                minutes = seconds // 60
+                secs = seconds % 60
+                return f"{minutes}:{secs:02d}"
+        
+        # Determine which playlist we're summarizing
+        target_playlist = playlist or self._current
+        
+        items = self.view(playlist)
+        # Check if items is a string (error message) or empty list
+        if isinstance(items, str) or not items:
+            return items if isinstance(items, str) else "Playlist is empty."
+
+        num_tracks = len(items)
+        # Count artists
+        artist_counts = Counter([(s.get("artist") or "Unknown").strip() for s in items])
+        num_artists = len([a for a in artist_counts.keys() if a and a != "Unknown"])
+
+        # Enrich with DB info where possible (duration, album, spotify_uri)
+        total_duration_ms = 0
+        album_counts = Counter()
+        track_rows = []
+        for s in items:
+            artist = s.get("artist") or "Unknown"
+            title = s.get("title") or s.get("track") or ""
+            info = None
+            try:
+                info = get_track_info(artist, title)
+            except Exception:
+                info = None
+            duration_ms = info.get("duration_ms") if info else None
+            album = info.get("album") if info else None
+            spotify_uri = info.get("spotify_uri") if info else None
+            if duration_ms:
+                total_duration_ms += duration_ms
+            if album:
+                album_counts[album] += 1
+            display_duration = format_duration_func(duration_ms)
+            track_rows.append({"artist": artist, "title": title, "duration": display_duration, "spotify_uri": spotify_uri})
+
+        avg_duration_ms = int(total_duration_ms / num_tracks) if num_tracks and total_duration_ms else None
+        num_albums = len([a for a in album_counts if a and a.strip()])
+
+        top_artists = artist_counts.most_common(5)
+        top_albums = album_counts.most_common(5)
+
+        # Build HTML summary
+        parts = []
+        parts.append(f"<div><h3>Playlist '{target_playlist or '(current)'}' summary</h3>")
+        parts.append("<ul>")
+        parts.append(f"<li>Tracks: <strong>{num_tracks}</strong></li>")
+        parts.append(f"<li>Unique artists: <strong>{num_artists}</strong></li>")
+        parts.append(f"<li>Albums in playlist: <strong>{num_albums}</strong></li>")
+        if total_duration_ms:
+            parts.append(f"<li>Total duration: <strong>{format_duration_func(total_duration_ms)}</strong></li>")
+        else:
+            parts.append(f"<li>Total duration: <strong>Unknown</strong></li>")
+        if avg_duration_ms:
+            parts.append(f"<li>Average track length: <strong>{format_duration_func(avg_duration_ms)}</strong></li>")
+        parts.append("</ul>")
+
+        # Top artists
+        if top_artists:
+            parts.append("<strong>Top artists:</strong><br><ol>")
+            for a, cnt in top_artists[:5]:
+                parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
+            parts.append("</ol>")
+
+        # Top albums
+        if top_albums:
+            parts.append("<strong>Top albums:</strong><br><ol>")
+            for a, cnt in top_albums[:5]:
+                parts.append(f"<li>{a} ({cnt} track{'s' if cnt!=1 else ''})</li>")
+            parts.append("</ol>")
+
+        # Track listing table
+        parts.append("<strong>Tracks:</strong>")
+        parts.append("<table style='width:100%;border-collapse:collapse'>")
+        parts.append("<thead><tr><th style='text-align:left;padding:4px'>#</th><th style='text-align:left;padding:4px'>Artist</th><th style='text-align:left;padding:4px'>Title</th><th style='text-align:left;padding:4px'>Duration</th></tr></thead>")
+        parts.append("<tbody>")
+        for i, row in enumerate(track_rows):
+            spotify_link = f" <a href='{row['spotify_uri']}' target='_blank'>♫</a>" if row.get("spotify_uri") else ""
+            parts.append(f"<tr style='border-top:1px solid #eee'><td style='padding:4px'>{i+1}</td><td style='padding:4px'>{row['artist']}</td><td style='padding:4px'>{row['title']}{spotify_link}</td><td style='padding:4px'>{row['duration']}</td></tr>")
+        parts.append("</tbody></table></div>")
+
+        return "".join(parts)
+
+    @staticmethod
+    def get_help() -> str:
+        """Return playlist command help text."""
+        return (
+            "Playlist commands:"
+            "<br> - /pl create [playlist name]   (create playlist)"
+            "<br> - /pl switch [playlist name]   (switch to existing)"
+            "<br> - /pl add [artist]: [song title]"
+            "<br> - /pl add [song title]   (disambiguate if needed with '/pl choose a number from the list')"
+            "<br> - /pl choose [index of the list of songs]"
+            "<br> - /pl remove [artist]: [song title]"
+            "<br> - /pl view [playlist name] or none for current"
+            "<br> - /pl clear [playlist name] or none for current]"
+            "<br> - /pl summary|stats|info [playlist name] or none for current]"
+            "<br> - /pl auto [description]   (auto-create playlist from description, e.g., 'sad love songs')"
+            
+            "<br> - Use /qa for information about track or artists"
+        )
 
 
 shared_playlists = PlaylistManager()

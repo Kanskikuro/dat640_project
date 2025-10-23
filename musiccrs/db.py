@@ -323,7 +323,6 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
         SELECT DISTINCT playlist_id
         FROM playlist_songs
         WHERE song_id IN ({placeholders})
-        ORDER BY RANDOM()
         LIMIT 2000
     """
     cur.execute(playlist_query, song_ids)

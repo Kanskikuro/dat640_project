@@ -294,7 +294,16 @@ class MusicCRS(Agent):
             case "recommend":
                 res = self.playlists.recommend(arg or None)
                 return res
-            
+            case "select":
+                try:
+                    indices = [int(x) for x in arg.split()]
+                except ValueError:
+                    return "Please provide valid numbers, e.g., '/pl select 1 2 3'."
+                res = self.playlists.select_recommendations(indices)
+                self._emit_songs_for_current()
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                return res
             case _:
                 return self._pl_help()
 

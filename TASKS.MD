@@ -40,7 +40,7 @@
 **Delivery:** In-person demo
 
 - [x] **R4.1:** Recommend 3–5 additional songs based on playlist – 4p (Depends on R2.2)  
-- [ ] **R4.2:** Allow user to select which recommended songs to add – 1p (Depends on R4.1)  
+- [x] **R4.2:** Allow user to select which recommended songs to add – 1p (Depends on R4.1)  
 - [x] **R4.3:** Explain why each recommended track was chosen – 2p (Depends on R4.1)  
 - [ ] **R4.4:** Create playlist from natural language description – 3p (Depends on R2.2)  
 - [ ] **R4.5:** Determine playlist length intelligently – 1p (Depends on R4.4)  
@@ -52,11 +52,11 @@
 **Deadline:** w44 (Nov 2)  
 **Delivery:** In-person demo
 
-- [ ] **R5.1:** Manipulate playlists via natural language, extract parameters – 4p (Depends on R2.2)  
-- [ ] **R5.2:** Natural language selection for adding some/all/no songs – 3p (Depends on R4.2)  
-- [ ] **R5.3:** Add song by name in natural language – 1p (Depends on R5.1, R3.1)  
+- [x] **R5.1:** Manipulate playlists via natural language, extract parameters – 4p (Depends on R2.2)  
+- [x] **R5.2:** Natural language selection for adding some/all/no songs – 3p (Depends on R4.2)  
+- [x] **R5.3:** Add song by name in natural language – 1p (Depends on R5.1, R3.1)  
 - [ ] **R5.4:** Ask questions (from R3.3) in natural language – 1p (Depends on R5.1, R3.3)  
-- [ ] **R5.5:** Support recommend command (R4.1) via natural language – 1p (Depends on R5.1, R4.1)  
+- [x] **R5.5:** Support recommend command (R4.1) via natural language – 1p (Depends on R5.1, R4.1)  
 - [ ] **R5.6:** Enter complex song names in simplified form – 2p (Depends on R5.3)  
 
 ---

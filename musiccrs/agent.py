@@ -319,11 +319,20 @@ class MusicCRS(Agent):
         if not self._llm:
             return "LLM is disabled."
 
+        if self.playlists._recommendation_cache:
+            rec , recommended_data = self.playlists._recommendation_cache 
+            recommendation_enum = [
+                f"{i+1}. {rec[song_id]} (song appears in {freq} playlists)"
+                for i, (song_id, freq) in enumerate(recommended_data) if song_id in rec
+                ]
+        else:
+            recommendation_enum = []
+
         prompt = f"""
     You are an intent parser using free natural language for a music playlist system.
     Only output a single JSON object with no extra text.
     The JSON object must have the keys:
-    - "intent": one of ["create", "choose",  "remove", "switch", "view", "view_playlists", "clear", "add", "summary", "recommend"]
+    - "intent": one of ["create", "choose", "select", "remove", "switch", "view", "view_playlists", "clear", "add", "summary", "recommend"]
     - "song": the song title 
     - "artist": the artist name or empty string if not given.
     - "idx": the index number for choosing from multiple options (1-based)
@@ -333,13 +342,17 @@ class MusicCRS(Agent):
     Check for if the song is valid and for fix any obvious typos in artist or title.
     If there is no song, but artist, find a song from that artist that is not already in the playlist.
     if there is no artist but song and the intent is add. return "intent" as "add", artist "song" as the title. 
-    Allow users to express their intentions for playlist manipulation and interacting with recommendations using free natural language text instead of/in addition to using commands with a fixed syntax. 
-    Allow users to refer to tracks and artists without exact string matching (including lack of proper capitalization and punctuation) and resolve ambiguities (eg, many artists have a song called “Love”).
+    If the user wants to select songs from the recommended list, always return the selection as "idx": a list of 1-based numbers corresponding to the order in the recommendation list, not song titles. Do not put song names in "idx".
     Dont add songs that are already in the playlist.
     
     
+    Allow users to express their intentions for playlist manipulation and interacting with recommendations using free natural language text instead of/in addition to using commands with a fixed syntax. 
+    Allow users to refer to tracks and artists without exact string matching (including lack of proper capitalization and punctuation) and resolve ambiguities (eg, many artists have a song called “Love”).
+    Allow the user to make a natural language selection, with support for adding all songs, some selected songs (eg, "add the first two" or "add them except the one by Metallica"), or no songs at all.
+    
     User input: "{text}"
     User playlist : "{self.playlists.view(self.playlists._current)}"
+    Recomended songs: "{recommendation_enum}"
 
     Respond with JSON only.
     """
@@ -362,7 +375,8 @@ class MusicCRS(Agent):
             return f"Could not parse intent: {e}. Raw LLM response: {llm_reply}"
 
         intent = data.get("intent").lower()
-        idx = data.get('idx', 1)
+        idx_list = data.get('idx', [])
+        idx_list = [i for i in idx_list if isinstance(i, int) and i > 0]
         artist = data.get("artist", "")
         song = data.get("song", "")
         playlist_name = data.get("playlist_name", "")
@@ -371,28 +385,21 @@ class MusicCRS(Agent):
             arg = song
         
         print(llm_reply)
-        
+        print(recommendation_enum)
         match intent:
-            case "add":
-                return self._handle_playlist_command(f"add {arg}")
-            case "choose":
-                return self._handle_playlist_command(f"choose {idx}")
-            case "remove":
-                return self._handle_playlist_command(f"remove {arg}")
-            case "view":
-                return self._handle_playlist_command(f"view")
-            case "view_playlists":
-                return self._handle_playlist_command(f"view_playlists")
-            case "clear":
-                return self._handle_playlist_command(f"clear")
-            case "create":
-                return self._handle_playlist_command(f"create {playlist_name}")
-            case "switch":
-                return self._handle_playlist_command(f"switch {playlist_name}")
-            case "summary" | "recommend":
-                return self._handle_playlist_command(f"{intent} {playlist_name}")
+            case "view_playlists" :
+                cmd = intent
+            case "add" | "remove":
+                cmd = f"{intent} {arg}"
+            case "choose" | "select":
+                cmd = f"{intent} {' '.join(map(str, idx_list))}"
+            case "create" | "switch" | "view" | "recommend" | "summary" |"clear":
+                cmd = f"{intent} {playlist_name}"
             case _:
-                return "No intent, heres your llm reply back: " + llm_reply
+                return "No intent, here’s your LLM reply back: " + llm_reply
+
+        return self._handle_playlist_command(cmd)
+
 
     def _pl_help(self) -> str:
         return (

@@ -6,7 +6,7 @@ class PlaylistManager:
         self._playlists: dict[str, list[dict]] = {}
         self._current: str | None = None
         self._pending_additions: list[dict] | None = None
-
+        self._recommendation_cache: list[str] | None = None
         self.create_playlist("a")
         self.add_song("kendrick lamar : humble.")
     # Playlist functions
@@ -190,10 +190,40 @@ class PlaylistManager:
         if not songs:
             return "No valid songs in the playlist."
 
-        rec = recommend_songs(songs)
+        rec , recommended_data = recommend_songs(songs)
         if rec:
-            return "Recommends:<br>" + "<br>".join(rec)
+            self._recommendation_cache = rec , recommended_data
+            result = [
+                f"{i+1}. {rec[song_id]} (song appears in {freq} playlists)"
+                for i, (song_id, freq) in enumerate(recommended_data) if song_id in rec
+            ]
+            return "Recommends:<br>" + "<br>".join(result) + "<br>Use '/pl select [numbers]' to add."
         else:
-            return "No recommendations found."
+                return "No recommendations found."
+            
+    def select_recommendations(self, indices: list[int]) -> str:
+        if not self._recommendation_cache:
+            return "No recommendations to choose from. Use '/pl recommend' first."
+
+        rec, recommended_data = self._recommendation_cache  # unpack tuple
+        added_songs = []
+
+        for idx in indices:
+            if idx < 1 or idx > len(recommended_data):
+                return f"Please choose numbers between 1 and {len(recommended_data)}."
+
+            song_id, _ = recommended_data[idx - 1]
+            song_info = rec[song_id]  # "Artist : Title"
+            artist, title = song_info.split(" : ", 1)
+            arg = f"{artist}:{title}"
+            self.add_song(arg)
+            added_songs.append(song_info)
+
+        if added_songs:
+            return "Added: <br>" + "<br>".join(added_songs)
+        else:
+            return "No songs added."
+
+
 
 shared_playlists = PlaylistManager()

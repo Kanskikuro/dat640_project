@@ -6,7 +6,7 @@ from dialoguekit.core.utterance import Utterance
 from dialoguekit.participant.agent import Agent
 from dialoguekit.participant.participant import DialogueParticipant
 from dialoguekit.core.intent import Intent
-
+import json
 from db import get_track_info, get_artist_stats, search_tracks_by_keywords
 from spotify import SpotifyClient
 from collections import Counter
@@ -30,7 +30,7 @@ class MusicCRS(Agent):
         self._spotify = SpotifyClient()
         self.playlists = shared_playlists
 
-    # --- small helpers ---
+    # --- small helpers to update frontend ---
     def _emit_pl(self, event_type: str, data):
         try:
             emit_event("pl_response", {"type": event_type, "data": data})
@@ -112,7 +112,7 @@ class MusicCRS(Agent):
             response = self._handle_playlist_command(
                 utterance.text[4:].strip())
         else:
-            response = "I'm sorry, I don't understand that command."
+            response = self._handle_nl_playlist_intent(utterance.text)
 
         self._dialogue_connector.register_agent_utterance(
             AnnotatedUtterance(
@@ -135,117 +135,199 @@ class MusicCRS(Agent):
         - /pl choose <n>
         - /pl summary|stats|info [name]
         - /pl auto <description>
+        - /pl recommend <playlist>
         """
         parts = command.split(" ", 1)
-        if not parts:
-            return self._pl_help()
         action = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
-        # Playlist ops
-        if action == "create":
-            res = self.playlists.create_playlist(arg)
-            if res.startswith("Created"):
-                self._emit_pl("created", arg)
-            else:
-                self._emit_pl("switched", arg)
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            self._emit_songs_for_current()
-            return res
-
-        if action == "switch":
-            res = self.playlists.switch_playlist(arg)
-            self._emit_pl("switched", arg)
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            self._emit_songs_for_current()
-            return res
-
-        if action == "view":
-            items = self.playlists.view(arg or None)
-            if isinstance(items, str):
-                return items
-            # emit view for UI too
-            song_strings = [f"{s['artist']}:{s['title']}" for s in items]
-            self._emit_pl("songs", song_strings)
-            return "<br>".join(f"{s['title']} : {s['artist']}" for s in items)
-
-        if action == "clear":
-            res = self.playlists.clear(arg or None)
-            target = arg or getattr(self.playlists, "_current", None)
-            self._emit_pl("cleared", target)
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            self._emit_pl("songs", [])
-            return res
-
-        # Song ops
-        if action == "add":
-            res = self.playlists.add_song(arg)
-            # Multiple matches case: manager stores pending
-            pending = getattr(self.playlists, "_pending_additions", None)
-            if pending:
-                candidates = [{"artist": c["artist"], "title": c["title"]} for c in pending]
-                self._emit_pl("multiple_matches", candidates)
+        match action:
+            case "create":
+                res = self.playlists.create_playlist(arg)
+                self._emit_pl("created" if res.startswith("Created") else "switched", arg)
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                self._emit_songs_for_current()
                 return res
-            # Otherwise, song added
-            self._emit_pl("added", arg)
-            self._emit_songs_for_current()
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            return res
-        
-        if action == "choose":
-            try:
-                idx = int(arg) - 1
-            except ValueError:
-                return "Please provide a valid number, e.g., '/pl choose 1'."
-            res = self.playlists.choose_song(idx)
-            if res.startswith("Added"):
-                self._emit_pl("added", res)
-            self._emit_songs_for_current()
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            return res
 
-        if action == "remove":
-            res = self.playlists.remove_song(arg)
-            if res.startswith("Removed"):
-                self._emit_pl("removed", arg)
-            self._emit_songs_for_current()
-            if hasattr(self.playlists, "view_playlists"):
-                self._emit_pl("playlists", self.playlists.view_playlists())
-            return res
-        
-        if action == "auto":
-            return self._handle_auto_playlist(arg)
-        
-        if action in ("summary", "stats", "info"):
-            return self.playlists.get_summary(
+            case "switch":
+                res = self.playlists.switch_playlist(arg)
+                self._emit_pl("switched", arg)
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                self._emit_songs_for_current()
+                return res
+
+            case "view":
+                items = self.playlists.view(arg or None)
+                if isinstance(items, str):
+                    return items
+                # emit view for UI too
+                song_strings = [f"{s['artist']}:{s['title']}" for s in items]
+                self._emit_pl("songs", song_strings)
+                return "<br>".join(f"{s['artist']} : {s['title']}" for s in items)
+
+            case "clear":
+                res = self.playlists.clear(arg or None)
+                target = arg or getattr(self.playlists, "_current", None)
+                self._emit_pl("cleared", target)
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                self._emit_pl("songs", [])
+                return res
+
+            # Song ops
+            case "add":
+                res = self.playlists.add_song(arg)
+                # Multiple matches case: manager stores pending
+                pending = getattr(self.playlists, "_pending_additions", None)
+                if pending:
+                    candidates = [{"artist": c["artist"], "title": c["title"]} for c in pending]
+                    self._emit_pl("multiple_matches", candidates)
+                    return res
+                # Otherwise, song added
+                self._emit_pl("added", arg)
+                self._emit_songs_for_current()
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                return res
+            
+            case "choose":
+                try:
+                    idx = int(arg) - 1
+                except ValueError:
+                    return "Please provide a valid number, e.g., '/pl choose 1'."
+                res = self.playlists.choose_song(idx)
+                if res.startswith("Added"):
+                    self._emit_pl("added", res)
+                self._emit_songs_for_current()
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                return res
+
+            case "remove":
+                res = self.playlists.remove_song(arg)
+                if res.startswith("Removed"):
+                    self._emit_pl("removed", arg)
+                self._emit_songs_for_current()
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                return res
+            
+            case "summary" | "stats" | "info":
+                return self.playlists.get_summary(
                 playlist=arg or None,
                 format_duration_func=self._format_duration
             )
-
-        # Help / unknown
-        return self._pl_help()
-
-    def _handle_auto_playlist(self, description: str) -> str:
-        """Automatically create a playlist from a natural language description.
-        
-        Delegates to the modular auto_playlist.create_auto_playlist() function.
-        
-        Args:
-            description: Natural language description (e.g., "sad love songs" or "energetic gym music")
             
-        Returns:
-            HTML formatted response with playlist creation results
+            case "recommend":
+                res = self.playlists.recommend(arg or None)
+                return res
+            case "select":
+                try:
+                    indices = [int(x) for x in arg.split()]
+                except ValueError:
+                    return "Please provide valid numbers, e.g., '/pl select 1 2 3'."
+                res = self.playlists.select_recommendations(indices)
+                self._emit_songs_for_current()
+                if hasattr(self.playlists, "view_playlists"):
+                    self._emit_pl("playlists", self.playlists.view_playlists())
+                return res
+            case _:
+                return self._pl_help()
+
+    def _handle_nl_playlist_intent(self, text: str) -> str:
         """
-        return create_auto_playlist(
-            description=description,
-            playlist_manager=self.playlists,
-            emit_pl_func=self._emit_pl
-        )
+        Handle natural language playlist commands.
+        Examples:
+        "Add Hey Jude by The Beatles"
+        "Remove Shape of You"
+        "Show my playlist"
+        "Clear the current playlist"
+        """
+        if not self._llm:
+            return "LLM is disabled."
+
+        if self.playlists._recommendation_cache:
+            rec , recommended_data = self.playlists._recommendation_cache 
+            recommendation_enum = [
+                f"{i+1}. {rec[song_id]} (song appears in {freq} playlists)"
+                for i, (song_id, freq) in enumerate(recommended_data) if song_id in rec
+                ]
+        else:
+            recommendation_enum = []
+
+        prompt = f"""
+    You are an intent parser using free natural language for a music playlist system.
+    Only output a single JSON object with no extra text.
+    The JSON object must have the keys:
+    - "intent": one of ["create", "choose", "select", "remove", "switch", "view", "view_playlists", "clear", "add", "summary", "recommend"]
+    - "song": the song title 
+    - "artist": the artist name or empty string if not given.
+    - "idx": the index number for choosing from multiple options (1-based)
+    - "playlist_name": the playlist name or empty string if not given.  
+    - "reply": the full text reply from you, the llm.
+    
+    Check for if the song is valid and for fix any obvious typos in artist or title.
+    If there is no song, but artist, find a song from that artist that is not already in the playlist.
+    if there is no artist but song and the intent is add. return "intent" as "add", artist "song" as the title. 
+    If the user wants to select songs from the recommended list, always return the selection as "idx": a list of 1-based numbers corresponding to the order in the recommendation list, not song titles. Do not put song names in "idx".
+    Dont add songs that are already in the playlist.
+    
+    
+    Allow users to express their intentions for playlist manipulation and interacting with recommendations using free natural language text instead of/in addition to using commands with a fixed syntax. 
+    Allow users to refer to tracks and artists without exact string matching (including lack of proper capitalization and punctuation) and resolve ambiguities (eg, many artists have a song called “Love”).
+    Allow the user to make a natural language selection, with support for adding all songs, some selected songs (eg, "add the first two" or "add them except the one by Metallica"), or no songs at all.
+    
+    User input: "{text}"
+    User playlist : "{self.playlists.view(self.playlists._current)}"
+    Recomended songs: "{recommendation_enum}"
+
+    Respond with JSON only.
+    """
+
+        try:
+            llm_reply = self._llm.ask(prompt)
+            if not llm_reply:
+                return "Could not parse intent: LLM returned empty response"
+
+            # Remove any code fences
+            if llm_reply.startswith("```"):
+                llm_reply = (
+                    llm_reply.replace("```json", "")
+                    .replace("```", "")
+                    .strip()
+                )
+
+            data = json.loads(llm_reply)
+        except json.JSONDecodeError as e:
+            return f"Could not parse intent: {e}. Raw LLM response: {llm_reply}"
+
+        intent = data.get("intent").lower()
+        idx_list = data.get('idx', [])
+        idx_list = [i for i in idx_list if isinstance(i, int) and i > 0]
+        artist = data.get("artist", "")
+        song = data.get("song", "")
+        playlist_name = data.get("playlist_name", "")
+        arg = f"{artist}:{song}"
+        if artist == "":
+            arg = song
+        
+        print(llm_reply)
+        print(recommendation_enum)
+        match intent:
+            case "view_playlists" :
+                cmd = intent
+            case "add" | "remove":
+                cmd = f"{intent} {arg}"
+            case "choose" | "select":
+                cmd = f"{intent} {' '.join(map(str, idx_list))}"
+            case "create" | "switch" | "view" | "recommend" | "summary" |"clear":
+                cmd = f"{intent} {playlist_name}"
+            case _:
+                return "No intent, here's your LLM reply back: " + llm_reply
+
+        return self._handle_playlist_command(cmd)
 
     def _pl_help(self) -> str:
         """Return playlist command help text."""

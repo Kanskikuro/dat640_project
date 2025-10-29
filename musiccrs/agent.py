@@ -219,6 +219,9 @@ class MusicCRS(Agent):
                 playlist=arg or None,
                 format_duration_func=self._format_duration
             )
+
+            case "auto":
+                return self._handle_auto_playlist(arg)
             
             case "recommend":
                 res = self.playlists.recommend(arg or None)
@@ -235,6 +238,23 @@ class MusicCRS(Agent):
                 return res
             case _:
                 return self._pl_help()
+            
+    def _handle_auto_playlist(self, description: str) -> str:
+        """Automatically create a playlist from a natural language description.
+        
+        Delegates to the modular auto_playlist.create_auto_playlist() function.
+        
+        Args:
+            description: Natural language description (e.g., "sad love songs" or "energetic gym music")
+            
+        Returns:
+            HTML formatted response with playlist creation results
+        """
+        return create_auto_playlist(
+            description=description,
+            playlist_manager=self.playlists,
+            emit_pl_func=self._emit_pl
+        )
 
     def _handle_nl_playlist_intent(self, text: str) -> str:
         """
@@ -303,12 +323,12 @@ class MusicCRS(Agent):
         except json.JSONDecodeError as e:
             return f"Could not parse intent: {e}. Raw LLM response: {llm_reply}"
 
-        intent = data.get("intent").lower()
-        idx_list = data.get('idx', [])
+        intent = data.get("intent", "").lower()
+        idx_list = data.get('idx', []) or []  # Handle None case
         idx_list = [i for i in idx_list if isinstance(i, int) and i > 0]
-        artist = data.get("artist", "")
-        song = data.get("song", "")
-        playlist_name = data.get("playlist_name", "")
+        artist = data.get("artist", "") or ""
+        song = data.get("song", "") or ""
+        playlist_name = data.get("playlist_name", "") or ""
         arg = f"{artist}:{song}"
         if artist == "":
             arg = song

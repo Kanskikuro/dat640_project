@@ -55,7 +55,7 @@
 - [x] **R5.1:** Manipulate playlists via natural language, extract parameters – 4p (Depends on R2.2)  
 - [x] **R5.2:** Natural language selection for adding some/all/no songs – 3p (Depends on R4.2)  
 - [x] **R5.3:** Add song by name in natural language – 1p (Depends on R5.1, R3.1)  
-- [ ] **R5.4:** Ask questions (from R3.3) in natural language – 1p (Depends on R5.1, R3.3)  
+- [x] **R5.4:** Ask questions (from R3.3) in natural language – 1p (Depends on R5.1, R3.3)  
 - [x] **R5.5:** Support recommend command (R4.1) via natural language – 1p (Depends on R5.1, R4.1)  
 - [ ] **R5.6:** Enter complex song names in simplified form – 2p (Depends on R5.3)  
 

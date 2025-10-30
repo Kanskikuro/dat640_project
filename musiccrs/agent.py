@@ -347,7 +347,7 @@ class MusicCRS(Agent):
     - "artist": the artist name or empty string if not given.
     - "idx": the index number for choosing from multiple options (1-based)
     - "playlist_name": the playlist name or empty string if not given.
-    - "description": for "auto" intent, the natural language description of the playlist to create (e.g., "bts", "sad love songs", "energetic gym music")
+    - "description": for "auto" intent, the natural language description of the playlist to create (e.g. "sad love songs", "energetic gym music")
     - "reply": the full text reply from you, the llm.
     
     IMPORTANT - Distinguish between "choose" and "select":
@@ -365,7 +365,7 @@ class MusicCRS(Agent):
     
     For "auto" intent: When the user wants to create a playlist from scratch based on a description (like an artist name, genre, mood, or theme), 
     set "intent" to "auto" and put the description in the "description" field. Examples:
-    - "create a playlist with bts" → {{"intent": "auto", "description": "bts"}}
+    - "create a playlist with relaxing music" → {{"intent": "auto", "description": "relaxing music"}}
     - "make a sad playlist" → {{"intent": "auto", "description": "sad songs"}}
     - "playlist for working out" → {{"intent": "auto", "description": "energetic gym music"}}
     

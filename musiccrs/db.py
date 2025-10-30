@@ -294,14 +294,16 @@ def get_artist_stats(artist: str) -> dict:
     }
 
 
-def search_tracks_by_keywords(keywords: list[str], limit: int = 20) -> list[dict]:
-    """Search for tracks from playlists matching any of the given keywords.
+def search_tracks_by_keywords(keywords: list[str], limit: int) -> list[dict]:
+    """Search for tracks with diversity and quality.
     
-    Searches ONLY in playlist names to find tracks from relevant playlists.
-    Prioritizes tracks from playlists with more followers.
+    Strategy:
+    1. Check playlist names first for context
+    2. Get diverse songs from high-follower playlists
+    3. Fallback to artist search if no playlists match
     
     Args:
-        keywords: List of search terms (e.g., ["love", "sad", "party"])
+        keywords: List of search terms
         limit: Maximum number of tracks to return
         
     Returns:
@@ -313,62 +315,113 @@ def search_tracks_by_keywords(keywords: list[str], limit: int = 20) -> list[dict
     conn = sqlite3.connect(DB_PATH, timeout=30)
     cur = conn.cursor()
     
-    # Build WHERE clause with OR conditions for each keyword
+    # STRATEGY 1: Search playlists first (gives diversity + context)
     conditions = []
-    params = []
+    params_playlist = []
     for kw in keywords:
-        search_term = f"%{kw}%"
         conditions.append("name LIKE ? COLLATE NOCASE")
-        params.append(search_term)
+        params_playlist.append(f"%{kw}%")
     
     where_clause = " OR ".join(conditions)
-    
-    # Step 1: Find top matching playlists (FAST - only searches playlist table)
-    # Increased from 5 to 100 playlists to get more variety
-    params_step1 = params.copy()
-    params_step1.append(20)
+    params_playlist.append(30)  # Top 30 matching playlists
     
     playlist_query = f"""
-        SELECT pid FROM playlists
+        SELECT pid, num_followers FROM playlists
         WHERE {where_clause}
         ORDER BY num_followers DESC
         LIMIT ?
     """
     
-    cur.execute(playlist_query, params_step1)
-    playlist_ids = [row[0] for row in cur.fetchall()]
+    cur.execute(playlist_query, params_playlist)
+    playlists = cur.fetchall()
     
-    if not playlist_ids:
-        conn.close()
-        return []
+    if playlists:
+        playlist_ids = [row[0] for row in playlists]
+        placeholders = ','.join('?' * len(playlist_ids))
+        
+        # Get diverse songs with popularity tracking
+        # Use RANDOM() to ensure variety across multiple playlists
+        songs_query = f"""
+            SELECT s.id, s.artist, s.title, s.album, s.spotify_uri,
+                   COUNT(DISTINCT ps.playlist_id) AS popularity
+            FROM songs s
+            INNER JOIN playlist_songs ps ON ps.song_id = s.id
+            WHERE ps.playlist_id IN ({placeholders})
+            GROUP BY s.id, s.artist, s.title, s.album, s.spotify_uri
+            HAVING COUNT(DISTINCT s.artist) <= ?
+            ORDER BY popularity DESC, RANDOM()
+            LIMIT ?
+        """
+        
+        # Limit diversity: max songs per result should have varied artists
+        cur.execute(songs_query, playlist_ids + [limit // 2, limit * 2])
+        rows = cur.fetchall()
+        
+        if rows:
+            # Ensure artist diversity in final results
+            seen_artists = set()
+            diverse_results = []
+            other_results = []
+            
+            for row in rows:
+                artist = row[1]
+                if artist not in seen_artists or len(seen_artists) >= limit // 3:
+                    diverse_results.append(row)
+                    seen_artists.add(artist)
+                else:
+                    other_results.append(row)
+                
+                if len(diverse_results) >= limit:
+                    break
+            
+            # Fill remaining slots with other songs if needed
+            if len(diverse_results) < limit:
+                diverse_results.extend(other_results[:limit - len(diverse_results)])
+            
+            conn.close()
+            return [
+                {
+                    "id": row[0],
+                    "artist": row[1],
+                    "title": row[2],
+                    "album": row[3] or "Unknown",
+                    "spotify_uri": row[4],
+                    "popularity": row[5] or 0
+                }
+                for row in diverse_results[:limit]
+            ]
     
-    # Step 2: Get songs from these playlists (FAST - direct lookup with IN clause)
-    placeholders = ','.join('?' * len(playlist_ids))
-    params_step2 = playlist_ids + [limit]
+    # STRATEGY 2: Fallback to artist search if no playlists match
+    for kw in keywords:
+        artist_query = """
+            SELECT DISTINCT s.id, s.artist, s.title, s.album, s.spotify_uri,
+                   COUNT(DISTINCT ps.playlist_id) AS popularity
+            FROM songs s
+            LEFT JOIN playlist_songs ps ON ps.song_id = s.id
+            WHERE s.artist LIKE ? COLLATE NOCASE
+            GROUP BY s.id, s.artist, s.title, s.album, s.spotify_uri
+            ORDER BY popularity DESC
+            LIMIT ?
+        """
+        cur.execute(artist_query, (f"%{kw}%", limit))
+        rows = cur.fetchall()
+        
+        if rows:
+            conn.close()
+            return [
+                {
+                    "id": row[0],
+                    "artist": row[1],
+                    "title": row[2],
+                    "album": row[3] or "Unknown",
+                    "spotify_uri": row[4],
+                    "popularity": row[5] or 0
+                }
+                for row in rows
+            ]
     
-    songs_query = f"""
-        SELECT DISTINCT s.id, s.artist, s.title, s.album, s.spotify_uri
-        FROM songs s
-        INNER JOIN playlist_songs ps ON ps.song_id = s.id
-        WHERE ps.playlist_id IN ({placeholders})
-        LIMIT ?
-    """
-    
-    cur.execute(songs_query, params_step2)
-    rows = cur.fetchall()
     conn.close()
-    
-    return [
-        {
-            "id": row[0],
-            "artist": row[1],
-            "title": row[2],
-            "album": row[3] or "Unknown",
-            "spotify_uri": row[4],
-            "popularity": 0  # Not needed for this query type
-        }
-        for row in rows
-    ]
+    return []
 
 
 def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:

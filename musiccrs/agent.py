@@ -293,7 +293,7 @@ class MusicCRS(Agent):
     if there is no artist but song and the intent is add. return "intent" as "add", artist "song" as the title. 
     If the user wants to select songs from the recommended list, always return the selection as "idx": a list of 1-based numbers corresponding to the order in the recommendation list, not song titles. Do not put song names in "idx".
     Dont add songs that are already in the playlist.
-    
+    Always include the chosen song name in the "song" field, even if the user only mentioned the artist.
     
     Allow users to express their intentions for playlist manipulation and interacting with recommendations using free natural language text instead of/in addition to using commands with a fixed syntax. 
     Allow users to refer to tracks and artists without exact string matching (including lack of proper capitalization and punctuation) and resolve ambiguities (eg, many artists have a song called “Love”).

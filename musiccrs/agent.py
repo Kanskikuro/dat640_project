@@ -397,6 +397,8 @@ class MusicCRS(Agent):
             data = json.loads(llm_reply)
         except json.JSONDecodeError as e:
             return f"Could not parse intent: {e}. Raw LLM response: {llm_reply}"
+        
+        print("LLM reply:", llm_reply)
 
         intent = data.get("intent", "").lower()
         idx_raw = data.get('idx', []) or []
@@ -411,11 +413,32 @@ class MusicCRS(Agent):
         song = data.get("song", "") or ""
         playlist_name = data.get("playlist_name", "") or ""
         description = data.get("description", "") or ""
+        llm_reply_text = data.get("reply", "") or ""
+        
+        # Check if LLM needs more information for certain intents
+        needs_song = intent in ["add", "remove"] and not song and not artist
+        needs_description = intent == "auto" and not description
+        needs_playlist_name = intent in ["create", "switch"] and not playlist_name
+        needs_idx = intent in ["choose", "select"] and not idx_list
+        
+        # If LLM is asking for more information, return the reply instead of executing
+        if needs_song or needs_description or needs_playlist_name or needs_idx:
+            # Fallback messages if no reply provided
+            if needs_song:
+                return "Which song would you like to add/remove? Please specify the artist and title."
+            elif needs_description:
+                return "What kind of playlist would you like to create? Please describe it."
+            elif needs_playlist_name:
+                return "What would you like to name the playlist?"
+            elif needs_idx:
+                return "Which song(s) would you like to choose? Please specify the number(s)."
+            elif llm_reply_text:
+                return llm_reply_text
+        
         arg = f"{artist}:{song}"
         if artist == "":
             arg = song
 
-        print("LLM reply:", llm_reply)
         # Only print the relevant list based on intent
         if intent == "choose" and pending_additions:
             print("Pending additions:", pending_additions)

@@ -3,7 +3,12 @@ import json
 import sqlite3
 from threading import Lock
 from config import DB_PATH, MPD_DATA
-
+import requests
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import unicodedata
+import re
+from rapidfuzz import process, fuzz
 _indexes_lock = Lock()
 _indexes_done = False
 _sqlite_cfg_lock = Lock()
@@ -74,10 +79,6 @@ def create_db_and_load_mpd(db_file=DB_PATH, mpd_folder=MPD_DATA):
     if not os.path.exists(mpd_folder):
         raise FileNotFoundError(f"MPD data folder not found: {mpd_folder}")
 
-    if os.path.exists(db_file):
-        print(f"Database '{db_file}' already exists. Skipping load.")
-        return
-
     conn = sqlite3.connect(db_file, timeout=30)
     cursor = conn.cursor()
     # Unique constraint on (artist, title, album) to avoid duplicates of the same song from the same artist in different playlists or albums
@@ -117,6 +118,17 @@ def create_db_and_load_mpd(db_file=DB_PATH, mpd_folder=MPD_DATA):
     );
     """)
 
+    # Check if tables already have data
+    cursor.execute("SELECT COUNT(*) FROM songs")
+    songs_count = cursor.fetchone()[0]
+    cursor.execute("SELECT COUNT(*) FROM playlists")
+    playlists_count = cursor.fetchone()[0]
+
+    if songs_count > 0 and playlists_count > 0:
+        print("Songs and playlists already loaded. Skipping slice loading.")
+        conn.close()
+        return
+
     for slice_file in sorted(os.listdir(mpd_folder)):
         if not slice_file.endswith(".json"):
             continue
@@ -152,10 +164,8 @@ def create_db_and_load_mpd(db_file=DB_PATH, mpd_folder=MPD_DATA):
                         INSERT OR IGNORE INTO playlist_songs (playlist_id, song_id, pos)
                         VALUES (?, ?, ?)
                     """, (pl["pid"], song_id, track["pos"]))
-
         print(f"Loaded {slice_file}")
-
-    conn.commit()
+        conn.commit()
     conn.close()
     print("All slices loaded successfully.")
 
@@ -503,8 +513,241 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
     return songs_info, recommended_data
 
 
+# --- AcousticBrainz feature fetching and storing ---
+
+
+def audio_feature_columns():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    for col, col_type in [
+        ("ab_energy", "REAL"),
+        ("ab_danceability", "REAL"),
+        ("ab_tempo", "REAL"),
+        ("ab_key", "INTEGER"),
+        ("ab_loudness", "REAL"),
+        ("ab_features_json", "TEXT"),
+    ]:
+        try:
+            cur.execute(f"ALTER TABLE songs ADD COLUMN {col} {col_type}")
+        except sqlite3.OperationalError:
+            pass  # column already exists
+    conn.commit()
+    conn.close()
+
+
+
+BATCH_SIZE = 25      # Max 25 songs per API bulk request
+DB_COMMIT_BATCH = 500
+MAX_WORKERS = 10     # Parallel batch threads
+RETRIES = 3          # Retry failed requests
+
+
+# --- MBID Cache ---
+mbid_cache = {}
+def normalize_text(text: str) -> str:
+    """Lowercase, remove accents & punctuation for fuzzy matching."""
+    text = text.lower()
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+    text = re.sub(r'[^a-z0-9 ]', '', text)
+    return text
+
+def clean_title(title: str) -> str:
+    """Remove parentheses, brackets, and trailing dashes for fuzzy MBID lookup."""
+    # Remove (feat ...), (live), [remix], etc.
+    title = re.sub(r"[\(\[].*?[\)\]]", "", title)
+    # Remove extra whitespace and trailing dashes
+    title = re.sub(r"[-–—]+$", "", title).strip()
+    return title
+
+def get_mbid(title: str, artist: str) -> str | None:
+    """Fetch MBID from MusicBrainz with fallback to cleaned title."""
+    norm_title = normalize_text(title)
+    norm_artist = normalize_text(artist)
+
+    # Try exact title first
+    mbid = mbid_search(norm_title, norm_artist)
+    if mbid:
+        return mbid
+
+    # If fails, try cleaned title
+    clean = clean_title(title)
+    if clean != title:
+        norm_clean = normalize_text(clean)
+        mbid = mbid_search(norm_clean, norm_artist)
+        if mbid:
+            return mbid
+
+    return None
+
+def mbid_search(title: str, artist: str) -> str | None:
+    """Perform MusicBrainz search and fuzzy match."""
+    url = "https://musicbrainz.org/ws/2/recording/"
+    params = {
+        "query": f'recording:"{title}" AND artist:"{artist}"',
+        "fmt": "json",
+        "limit": 10
+    }
+    headers = {"User-Agent": "SongFeatureCollector/1.0"}
+
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        recordings = data.get("recordings", [])
+        if not recordings:
+            return None
+
+        titles = [normalize_text(rec.get("title", "")) for rec in recordings]
+        best_match, score, idx = process.extractOne(title, titles, scorer=fuzz.ratio)
+
+        if score < 70:
+            return None
+
+        return recordings[idx]["id"]
+    except requests.RequestException:
+        return None
+
+def get_mbid_cached(title: str, artist: str) -> str | None:
+    """Cache MBID lookups to reduce repeated MusicBrainz requests."""
+    key = f"{artist}|{title}"
+    if key in mbid_cache:
+        return mbid_cache[key]
+
+    mbid = get_mbid(title, artist)
+    mbid_cache[key] = mbid
+    return mbid
+
+
+# --- Feature extraction for one song ---
+def get_acousticbrainz_features(mbid, level="high-level"):
+    base = "https://acousticbrainz.org/api/v1"
+    url = f"{base}/{mbid}/{level}"
+    try:
+        r = requests.get(url, timeout=10)
+        if r.status_code == 200:
+            return r.json()
+    except requests.RequestException:
+        pass
+    return None
+
+
+def fetch_features_for_song(song):
+    song_id, title, artist = song
+    mbid = get_mbid_cached(title, artist)
+    if not mbid:
+        return None
+    features = get_acousticbrainz_features(mbid)
+    if not features:
+        return None
+
+    hl = features.get("highlevel", {})
+    ll = features.get("lowlevel", {})
+    rhythm = features.get("rhythm", {})
+    tonal = features.get("tonal", {})
+
+    energy = float(hl.get("energy", {}).get("probability", 0.0))
+    danceability = float(hl.get("danceability", {}).get("probability", 0.0))
+    tempo = float(rhythm.get("bpm", 0.0))
+    key = int(tonal.get("key_key", -1))
+    loudness = float(ll.get("loudness", 0.0))
+
+    return song_id, energy, danceability, tempo, key, loudness
+
+# --- Main batch processing ---
+from collections import Counter
+def store_features_in_db_parallel():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+
+    cursor.execute("SELECT id, title, artist FROM songs")
+    songs = cursor.fetchall()
+    total_songs = len(songs)
+    print(f"Total songs to process: {total_songs}")
+
+    results = []
+    failures = []
+    error_types = Counter()
+
+    def process_batch(batch_songs):
+        batch_results = []
+        batch_failures = 0
+        batch_errors = Counter()
+
+        for song in batch_songs:
+            success = None
+            error_reason = None
+
+            for attempt in range(RETRIES):
+                try:
+                    success = fetch_features_for_song(song)
+                    if success:
+                        batch_results.append(success)
+                        break
+                    else:
+                        error_reason = "No MBID or features"
+                        time.sleep(0.2)
+                except requests.RequestException:
+                    error_reason = "RequestException"
+                    time.sleep(0.2)
+                except Exception as e:
+                    error_reason = type(e).__name__
+                    time.sleep(0.2)
+
+            if not success:
+                batch_failures += 1
+                batch_errors[error_reason] += 1
+
+        return batch_results, batch_failures, batch_errors
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
+        for i in range(0, total_songs, BATCH_SIZE):
+            batch = songs[i:i + BATCH_SIZE]
+            futures.append(executor.submit(process_batch, batch))
+
+        processed_count = 0
+        for future in as_completed(futures):
+            batch_results, batch_failures_count, batch_errors = future.result()
+            results.extend(batch_results)
+            failures.extend([None] * batch_failures_count)  # just count them
+            error_types.update(batch_errors)
+            processed_count += len(batch_results) + batch_failures_count
+
+            print(f"Processed {processed_count}/{total_songs} songs "
+                  f"(Success so far: {len(results)}, Failed so far: {len(failures)})")
+            if batch_errors:
+                print(f"Batch error summary: {dict(batch_errors)}")
+
+    # Commit to DB in larger batches
+    print("Starting batch updates to database...")
+    for batch_start in range(0, len(results), DB_COMMIT_BATCH):
+        batch = results[batch_start:batch_start + DB_COMMIT_BATCH]
+        cursor.executemany(
+            """
+            UPDATE songs
+            SET ab_energy=?, ab_danceability=?, ab_tempo=?, ab_key=?, ab_loudness=?
+            WHERE id=?
+            """,
+            [(e, d, t, k, l, sid) for sid, e, d, t, k, l in batch]
+        )
+        conn.commit()
+        print(f"Committed batch {batch_start}-{batch_start + len(batch)} "
+              f"(Success in batch: {len(batch)}, Total failed: {len(failures)})")
+
+    conn.close()
+    print(f"Finished processing all songs. Total Success: {len(results)}, Total Failed: {len(failures)}")
+    if error_types:
+        print("Summary of error types:")
+        for err, count in error_types.most_common():
+            print(f"{err}: {count}")
+
 if __name__ == "__main__":
     configure_sqlite_once()
-    ensure_indexes_once()
     create_db_and_load_mpd(DB_PATH)
+    ensure_indexes_once()
     print("Database setup complete.")
+    audio_feature_columns()
+    store_features_in_db_parallel()
+
+    

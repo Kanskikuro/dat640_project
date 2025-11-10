@@ -27,6 +27,7 @@ export type AgentMessage = {
 export type UserMessage = {
   message: string;
 };
+<<<<<<< HEAD
 
 // Playlist types
 export type PlaylistContextType = {
@@ -42,3 +43,5 @@ export type PlaylistContextType = {
 
   onPlaylistResponse: (callback: (response: any) => void) => () => void;
 };
+=======
+>>>>>>> upstream/main

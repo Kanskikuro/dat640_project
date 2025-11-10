@@ -20,7 +20,10 @@ import {
 import { AgentChatMessage, UserChatMessage } from "../ChatMessage";
 import { ChatMessage } from "../../types";
 import { ConfigContext } from "../../contexts/ConfigContext";
+<<<<<<< HEAD
 import { usePlaylist } from "../../contexts/PlaylistContext";
+=======
+>>>>>>> upstream/main
 
 export default function ChatBox() {
   const { config } = useContext(ConfigContext);
@@ -36,9 +39,12 @@ export default function ChatBox() {
   const [chatMessages, setChatMessages] = useState<JSX.Element[]>([]);
   const [chatButtons, setChatButtons] = useState<JSX.Element[]>([]);
   const [inputValue, setInputValue] = useState<string>("");
+<<<<<<< HEAD
   const [showAddFields, setShowAddFields] = useState<boolean>(false);
   const [addArtist, setAddArtist] = useState<string>("");
   const [addTitle, setAddTitle] = useState<string>("");
+=======
+>>>>>>> upstream/main
   const chatMessagesRef = useRef(chatMessages);
   const inputRef = useRef<HTMLInputElement>(null);
 

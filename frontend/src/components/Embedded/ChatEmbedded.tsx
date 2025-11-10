@@ -1,4 +1,5 @@
 import "./ChatEmbedded.css";
+<<<<<<< HEAD
 import { ReactNode, useState } from "react";
 import Playlist from "../Playlist/Playlist";
 
@@ -12,6 +13,14 @@ export default function ChatEmbedded({ children }: { children: ReactNode }) {
         </div>
         {showPlaylist && <Playlist />}
       </div>
+=======
+import { ReactNode } from "react";
+
+export default function ChatEmbedded({ children }: { children: ReactNode }) {
+  return (
+    <div className="row">
+      <div className="col-md-6 col-sm-12">{children}</div>
+>>>>>>> upstream/main
     </div>
   );
 }

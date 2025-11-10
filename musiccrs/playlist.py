@@ -8,8 +8,8 @@ class PlaylistManager:
         self._current: str | None = None
         self._pending_additions: list[dict] | None = None
         self._recommendation_cache: list[str] | None = None
-        self.create_playlist("a")
-        self.add_song("kendrick lamar : humble.")
+
+        self.create_playlist("default")
     # Playlist functions
 
     def create_playlist(self, name: str):

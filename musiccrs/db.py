@@ -4,7 +4,6 @@ import sqlite3
 from threading import Lock
 from config import DB_PATH, MPD_DATA
 import numpy as np
-from collections import defaultdict
 
 _indexes_lock = Lock()
 _indexes_done = False
@@ -425,12 +424,9 @@ def search_tracks_by_keywords(keywords: list[str], limit: int) -> list[dict]:
     conn.close()
     return []
 
-
-def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
-    """ Recommend songs based on co-occurrence in playlists using song IDs.
-    Input: list of {"id": str, "artist": str, "title": str}.
-    
-    Returns: list of "ARTIST : TITLE (freq)".
+def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[dict]:
+    """Recommend songs based on co-occurrence in playlists using song IDs.
+       Returns normalized score between 0 and 1 for each song.
     """
     if not song_entries:
         return []
@@ -442,7 +438,7 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
     conn = sqlite3.connect(DB_PATH, timeout=30)
     cur = conn.cursor()
 
-    # Indexing for faster lookups
+    # Indexing
     cur.executescript("""
         CREATE INDEX IF NOT EXISTS idx_playlist_songs_song 
         ON playlist_songs(song_id);
@@ -451,14 +447,7 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
     """)
     conn.commit()
 
-
     placeholders = ",".join("?" for _ in song_ids)
-    #Limit the number of playlists touched.
-    #   smaller limit = faster but less accurate. 
-    #   bigger  limit = more accurate but slower.  
-    #   LIMIT : 1000 - 2500 for 0.1-0.25% of db playlists
-    #   Order by random makes it non-biased because of playlist order
-    #   Order by playlist follower recommends based on mainstream taste
     playlist_query = f"""
         SELECT DISTINCT playlist_id
         FROM playlist_songs
@@ -472,7 +461,6 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
         return []
 
     placeholders_pl = ",".join("?" for _ in playlist_ids)
-    # Co-occurrence counting
     query = f"""
         SELECT ps2.song_id, COUNT(*) AS freq
         FROM playlist_songs ps2
@@ -490,8 +478,8 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
         return []
 
     recommended_ids = [row[0] for row in recommended_data]
+    max_freq = max(row[1] for row in recommended_data)
     placeholders = ",".join("?" for _ in recommended_ids)
-    # Map song IDs to artist : song
     cur.execute(f"""
         SELECT id, title, artist 
         FROM songs 
@@ -499,278 +487,106 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[str]:
     """, recommended_ids)
     songs_info = {row[0]: f"{row[2]} : {row[1]}" for row in cur.fetchall()}
 
-
-
     conn.close()
-    return songs_info, recommended_data
+
+    # Normalize freq to [0,1]
+    return [{"song": songs_info[sid], "score": freq/max_freq} for sid, freq in recommended_data]
+
 
 # --------------------------- Embedding-based recommendations -----------
-
-def add_embedding_column():
-    """Ensure songs and playlists tables have an embedding column (JSON text)."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    # Check if column exists
-    cur.execute("PRAGMA table_info(songs)")
-    columns = [col[1] for col in cur.fetchall()]
-    if "embedding" not in columns:
-        cur.execute("ALTER TABLE songs ADD COLUMN embedding TEXT")
-        print("Added 'embedding' column to songs.")
-    else:
-        print("'embedding' column already exists.")
-    conn.commit()
-    conn.close()
-
-def store_song_embedding(song_id: int, embedding: np.ndarray):
-    """Store song embedding as JSON string."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        "UPDATE songs SET embedding = ? WHERE id = ?",
-        (json.dumps(embedding.tolist()), song_id)
-    )
-    conn.commit()
-    conn.close()
-
-def compute_playlist_embedding(pid: int):
-    """Compute average embedding of all songs in a playlist."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT s.embedding
-        FROM songs s
-        JOIN playlist_songs ps ON s.id = ps.song_id
-        WHERE ps.playlist_id = ?
-    """, (pid,))
-    rows = [json.loads(r[0]) for r in cur.fetchall() if r[0]]
-    conn.close()
-    if not rows:
-        return None
-    avg = np.mean(np.array(rows), axis=0)
-    return avg / np.linalg.norm(avg)
-
-def recommend_by_cosine(seed_song_ids: list[int], limit: int = 10):
-    """Recommend songs similar to seed songs using cosine similarity of embeddings."""
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    # Get seed embeddings
-    placeholders = ",".join("?" * len(seed_song_ids))
-    cur.execute(f"SELECT embedding FROM songs WHERE id IN ({placeholders})", seed_song_ids)
-    seed_embeds = [json.loads(r[0]) for r in cur.fetchall() if r[0]]
-    if not seed_embeds:
-        conn.close()
-        return []
-    # Compute centroid of seeds
-    centroid = np.mean(np.array(seed_embeds), axis=0)
-    centroid /= np.linalg.norm(centroid)
-    # Fetch candidate embeddings
-    cur.execute("SELECT id, embedding FROM songs WHERE embedding IS NOT NULL")
-    results = []
-    for sid, emb_json in cur.fetchall():
-        emb = np.array(json.loads(emb_json))
-        sim = float(np.dot(centroid, emb) / (np.linalg.norm(emb) + 1e-9))
-        results.append((sid, sim))
-    conn.close()
-    # Sort by similarity
-    results.sort(key=lambda x: x[1], reverse=True)
-    return results[:limit]
-
-def hybrid_recommend(seed_song_ids: list[int], top_k: int = 10, alpha: float = 0.5):
-    """
-    Hybrid recommender using:
-      - Playlist co-occurrence frequency
-      - Cosine similarity of embeddings
-
-    Args:
-        seed_song_ids: list of seed song IDs
-        top_k: number of recommendations to return
-        alpha: weight for co-occurrence (0.0 = only cosine, 1.0 = only co-occurrence)
-
-    Returns:
-        List of dicts: {"id", "artist", "title", "score"}
-    """
+def recommend_by_playlist_cosine(seed_song_ids: list[int], limit: int = 10, chunk_size=500):
+    """Recommend songs similar to seed songs using playlist co-occurrence (cosine sim)."""
     if not seed_song_ids:
         return []
 
-    # --- Step 1: Get co-occurrence recommendations ---
-    co_songs_info, co_data = recommend_songs(
-        [{"id": sid} for sid in seed_song_ids],
-        limit=top_k * 5  # get more to allow reranking
-    )
-
-    if not co_data:
-        co_songs_info = {}
-        co_data = []
-
-    co_scores = {song_id: freq for song_id, freq in co_data}
-
-    # --- Step 2: Get cosine similarity recommendations ---
-    cosine_results = recommend_by_cosine(seed_song_ids, limit=top_k * 5)
-    cosine_scores = {song_id: score for song_id, score in cosine_results}
-
-    # --- Step 3: Combine scores ---
-    combined_scores = {}
-    for song_id in set(co_scores.keys()) | set(cosine_scores.keys()):
-        co_score = co_scores.get(song_id, 0)
-        cos_score = cosine_scores.get(song_id, 0)
-        # Normalize co-occurrence (divide by max)
-        max_co = max(co_scores.values()) if co_scores else 1
-        norm_co = co_score / max_co
-        # Combine
-        combined = alpha * norm_co + (1 - alpha) * cos_score
-        combined_scores[song_id] = combined
-
-    # --- Step 4: Get song metadata ---
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    placeholders = ",".join("?" for _ in combined_scores)
-    cur.execute(f"SELECT id, artist, title FROM songs WHERE id IN ({placeholders})", list(combined_scores.keys()))
-    songs_meta = {row[0]: {"id": row[0], "artist": row[1], "title": row[2]} for row in cur.fetchall()}
-    conn.close()
 
-    # --- Step 5: Return top_k sorted by combined score ---
-    top_songs = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
-    return [
-        {**songs_meta[song_id], "score": combined_scores[song_id]}
-        for song_id, _ in top_songs
-    ]
-    
-    
-# ----------- Evaluation metrics -----------
-    
-def precision_at_k(recommended: list[int], ground_truth: list[int], k: int):
-    recommended = recommended[:k]
-    hits = sum(1 for r in recommended if r in ground_truth)
-    return hits / k
+    # --- Step 1: Get playlists for seeds ---
+    all_seed_playlists = set()
+    seed_playlists_map = {}
+    for batch in [seed_song_ids[i:i+chunk_size] for i in range(0, len(seed_song_ids), chunk_size)]:
+        placeholders = ",".join("?" for _ in batch)
+        cur.execute(f"SELECT song_id, playlist_id FROM playlist_songs WHERE song_id IN ({placeholders})", batch)
+        for song_id, pl_id in cur.fetchall():
+            seed_playlists_map.setdefault(song_id, set()).add(pl_id)
+            all_seed_playlists.add(pl_id)
 
-def recall_at_k(recommended: list[int], ground_truth: list[int], k: int):
-    recommended = recommended[:k]
-    hits = sum(1 for r in recommended if r in ground_truth)
-    return hits / len(ground_truth) if ground_truth else 0.0
+    if not all_seed_playlists:
+        conn.close()
+        return []
 
-def average_precision(recommended: list[int], ground_truth: list[int], k: int):
-    recommended = recommended[:k]
-    hits = 0
-    score = 0.0
-    for i, r in enumerate(recommended, start=1):
-        if r in ground_truth:
-            hits += 1
-            score += hits / i
-    return score / min(len(ground_truth), k) if ground_truth else 0.0
-
-def ndcg_at_k(recommended: list[int], ground_truth: list[int], k: int):
-    recommended = recommended[:k]
-    dcg = 0.0
-    idcg = sum(1 / np.log2(i+1) for i in range(1, min(len(ground_truth), k)+1))
-    if idcg == 0:
-        return 0.0
-    for i, r in enumerate(recommended, start=1):
-        if r in ground_truth:
-            dcg += 1 / np.log2(i+1)
-    return dcg / idcg
-
-def generate_seed_playlists_from_db(sample_size: int = 50, seed_per_playlist: int = 2):
-    """
-    Create pseudo-ground-truth from playlists in DB.
-    
-    Args:
-        sample_size: Number of playlists to sample
-        seed_per_playlist: Number of songs to use as seeds in each playlist
-
-    Returns:
-        List of dicts: {"seed_song_ids": [...], "ground_truth": [...]}
-    """
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    
-    # Get random playlists with enough songs
-    cur.execute(f"""
-        SELECT pid
-        FROM playlists
-        WHERE num_tracks > {seed_per_playlist}
-        ORDER BY RANDOM()
-        LIMIT {sample_size}
-    """)
-    playlists = [row[0] for row in cur.fetchall()]
-    
-    seed_playlists = []
-    for pid in playlists:
-        cur.execute("""
-            SELECT song_id
+    # --- Step 2: Get candidate songs in these playlists ---
+    song_playlists_map = {}
+    all_seed_playlists = list(all_seed_playlists)
+    for batch in [all_seed_playlists[i:i+chunk_size] for i in range(0, len(all_seed_playlists), chunk_size)]:
+        placeholders = ",".join("?" for _ in batch)
+        cur.execute(f"""
+            SELECT song_id, playlist_id
             FROM playlist_songs
-            WHERE playlist_id = ?
-            ORDER BY pos ASC
-        """, (pid,))
-        songs = [row[0] for row in cur.fetchall()]
-        if len(songs) <= seed_per_playlist:
-            continue
-        seed_ids = songs[:seed_per_playlist]
-        ground_truth = songs[seed_per_playlist:]
-        seed_playlists.append({
-            "seed_song_ids": seed_ids,
-            "ground_truth": ground_truth
-        })
+            WHERE playlist_id IN ({placeholders})
+              AND song_id NOT IN ({','.join('?' for _ in seed_song_ids)})
+        """, batch + seed_song_ids)
+        for song_id, pl_id in cur.fetchall():
+            song_playlists_map.setdefault(song_id, set()).add(pl_id)
+
+    # --- Step 3: Compute cosine similarity ---
+    seed_vector_len = len(all_seed_playlists) ** 0.5
+    results = []
+    for song_id, pls in song_playlists_map.items():
+        dot = len(pls & set(all_seed_playlists))
+        sim = dot / (seed_vector_len * (len(pls) ** 0.5) + 1e-9)
+        results.append((song_id, sim))
+
+    results.sort(key=lambda x: x[1], reverse=True)
+    top_results = results[:limit]
+
+    # --- Step 4: Map IDs to "ARTIST : TITLE" ---
+    placeholders = ",".join("?" for _ in top_results)
+    cur.execute(f"SELECT id, artist, title FROM songs WHERE id IN ({placeholders})", [sid for sid, _ in top_results])
+    id_to_name = {row[0]: f"{row[1]} : {row[2]}" for row in cur.fetchall()}
+
     conn.close()
-    return seed_playlists
+    return [{"song": id_to_name[sid], "score": score} for sid, score in top_results]
 
-def test_recommenders(seed_playlists: list[dict], k: int = 10, alpha: float = 0.5):
-    """
-    Evaluate co-occurrence, cosine similarity, and hybrid recommenders.
+def hybrid_recommend(seed_song_ids: list[int], top_k: int = 10, alpha: float = 0.5):
+    """Hybrid recommendation: co-occurrence + playlist cosine (rescaled)."""
+    if not seed_song_ids:
+        return []
 
-    Args:
-        seed_playlists: List of dicts {"seed_song_ids": [id1, id2], "ground_truth": [id3, ...]}
-        k: Top-K recommendations
-        alpha: Weight for hybrid
-    """
-    metrics = defaultdict(lambda: defaultdict(list))
+    # Step 1: Co-occurrence
+    co_list = recommend_songs([{"id": sid} for sid in seed_song_ids], limit=top_k*5)
+    co_scores = {item["song"]: item["score"] for item in co_list}
 
-    for pl in seed_playlists:
-        seed_ids = pl["seed_song_ids"]
-        ground_truth = pl["ground_truth"]
+    # Normalize co-occurrence scores
+    max_co = max(co_scores.values()) if co_scores else 1
+    co_norm = {song: score/max_co for song, score in co_scores.items()}
 
-        # Co-occurrence
-        co_info, co_data = recommend_songs([{"id": sid} for sid in seed_ids], limit=k)
-        co_recs = [sid for sid, freq in co_data]
+    # Step 2: Cosine similarity
+    cosine_results = recommend_by_playlist_cosine(seed_song_ids, limit=top_k*5)
+    max_cos = max(row['score'] for row in cosine_results) if cosine_results else 1
+    cosine_scores_rescaled = {row['song']: row['score']/max_cos for row in cosine_results}
 
-        # Cosine
-        cos_recs_data = recommend_by_cosine(seed_ids, limit=k)
-        cos_recs = [sid for sid, score in cos_recs_data]
+    # Step 3: Combine
+    combined_scores = {}
+    for song_name, co_score in co_norm.items():
+        cos_score = cosine_scores_rescaled.get(song_name, 0)
+        combined_scores[song_name] = alpha * co_score + (1 - alpha) * cos_score
 
-        # Hybrid
-        hybrid_recs_data = hybrid_recommend(seed_ids, top_k=k, alpha=alpha)
-        hybrid_recs = [r["id"] for r in hybrid_recs_data]
+    # Add cosine-only songs
+    for song_name, cos_score in cosine_scores_rescaled.items():
+        if song_name not in combined_scores:
+            combined_scores[song_name] = (1 - alpha) * cos_score
 
-        # Compute metrics
-        for name, recs in [("co_occurrence", co_recs), ("cosine", cos_recs), ("hybrid", hybrid_recs)]:
-            metrics[name]["precision"].append(precision_at_k(recs, ground_truth, k))
-            metrics[name]["recall"].append(recall_at_k(recs, ground_truth, k))
-            metrics[name]["map"].append(average_precision(recs, ground_truth, k))
-            metrics[name]["ndcg"].append(ndcg_at_k(recs, ground_truth, k))
-
-    # Aggregate results
-    results = {}
-    for name, m in metrics.items():
-        results[name] = {metric: np.mean(values) for metric, values in m.items()}
-
-    return results
-
-def test_recommenders_auto(sample_size: int = 50, k: int = 10, alpha: float = 0.5):
-    """
-    Test recommenders using pseudo-ground-truth generated from playlists.
-    """
-    seed_playlists = generate_seed_playlists_from_db(sample_size=sample_size)
-    return test_recommenders(seed_playlists, k=k, alpha=alpha)
+    # Step 4: Sort top K
+    top_combined = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
+    return [{"song": song_name, "score": score} for song_name, score in top_combined]
 
 if __name__ == "__main__":
     configure_sqlite_once()
     ensure_indexes_once()
     create_db_and_load_mpd(DB_PATH)
     print("Database setup complete.")
-    
-    results = test_recommenders_auto(sample_size=50, k=10, alpha=0.5)
-    for recommender, scores in results.items():
-        print(f"--- {recommender} ---")
-        for metric, value in scores.items():
-            print(f"{metric}: {value:.4f}")
+
     
     

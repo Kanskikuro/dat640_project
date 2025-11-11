@@ -201,7 +201,7 @@ class PlaylistManager:
             return "Recommends:<br>" + "<br>".join(result) + "<br>Use '/pl select [numbers]' to add."
         else:
                 return "No recommendations found."
-            
+             
     def select_recommendations(self, indices: list[int]) -> str:
         if not self._recommendation_cache:
             return "No recommendations to choose from. Use '/pl recommend' first."

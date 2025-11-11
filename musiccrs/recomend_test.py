@@ -36,12 +36,3 @@ if __name__ == "__main__":
             print(f" - {row['song']} (score: {row['score']:.3f})")  
 
 
-
-
-""" recommend_songs
-{1382: 'Kendrick Lamar : DNA.',
- 1386: 'Future : Mask Off',
- 1194: 'Lil Uzi Vert : XO TOUR Llif3',
- 3043: 'Post Malone : Congratulations',
- 537: 'Travis Scott : goosebumps'}
-"""

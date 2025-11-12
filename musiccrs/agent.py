@@ -33,7 +33,7 @@ class MusicCRS(Agent):
         self._spotify = SpotifyClient()
         self.playlists = shared_playlists
         
-        # R7.1: Session-based user context tracking
+        #Session-based user context tracking
         self._session_context = {
             "artists": Counter(),  # Track artist preferences
             "moods": [],  # Track mood history
@@ -63,339 +63,6 @@ class MusicCRS(Agent):
             return self._llm.ask(prompt)
         except Exception as e:
             return f"LLM error: {e}"
-    
-    # R7.1: Session context tracking
-    def _track_song_interaction(self, artist: str, title: str):
-        """Track user interactions with songs for personality profiling.
-        
-        Args:
-            artist: Artist name
-            title: Song title
-        """
-        # Update artist preference counter
-        self._session_context["artists"][artist] += 1
-        
-        # Track recent songs (keep last 20)
-        self._session_context["recent_songs"].append({
-            "artist": artist,
-            "title": title
-        })
-        if len(self._session_context["recent_songs"]) > 20:
-            self._session_context["recent_songs"].pop(0)
-    
-    def _get_user_taste_profile(self) -> dict:
-        """Build user taste profile from session context.
-        
-        Returns:
-            dict with:
-                - top_artists: List of top 3 artists
-                - artist_preferences: All artist counts
-        """
-        top_artists = [
-            artist for artist, _ in 
-            self._session_context["artists"].most_common(3)
-        ]
-        
-        return {
-            "top_artists": top_artists,
-            "artist_preferences": dict(self._session_context["artists"])
-        }
-    
-    def _detect_automatic_context(self) -> dict:
-        """R7.1.3: Automatic context detection based on time of day and previous behavior.
-        
-        Returns:
-            dict with:
-                - time_of_day: morning/afternoon/evening/night
-                - suggested_mood: Mood suggestion based on time
-                - context_description: Human-readable context description
-        """
-        current_hour = datetime.now().hour
-        
-        # Time of day detection
-        if 5 <= current_hour < 12:
-            time_of_day = "morning"
-            suggested_mood = "energetic"
-            context_desc = "morning energy boost"
-        elif 12 <= current_hour < 17:
-            time_of_day = "afternoon"
-            suggested_mood = "upbeat"
-            context_desc = "afternoon productivity"
-        elif 17 <= current_hour < 21:
-            time_of_day = "evening"
-            suggested_mood = "relaxing"
-            context_desc = "evening wind-down"
-        else:  # 21-5
-            time_of_day = "night"
-            suggested_mood = "calm"
-            context_desc = "late-night chill"
-        
-        # Analyze behavioral patterns
-        recent_moods = self._session_context["moods"][-10:]  # Last 10 mood requests
-        if recent_moods:
-            mood_counter = Counter(m["mood"] for m in recent_moods)
-            most_common_mood = mood_counter.most_common(1)[0][0]
-            context_desc += f", you often enjoy {most_common_mood} music"
-        
-        print(f"\n⏰ AUTOMATIC CONTEXT DETECTION (R7.1.3)")
-        print(f"   Time: {time_of_day} ({current_hour}:00)")
-        print(f"   Suggested Mood: {suggested_mood}")
-        print(f"   Context: {context_desc}\n")
-        
-        return {
-            "time_of_day": time_of_day,
-            "suggested_mood": suggested_mood,
-            "context_description": context_desc
-        }
-    
-    def _recommend_with_mood_and_taste(self, user_request: str) -> str:
-        """R7.1: LLM-based mood and personality-aware recommendation.
-        
-        NEW APPROACH:
-        1. Analyze emotion with BERT
-        2. Get user's taste profile from session
-        3. Ask LLM to recommend songs based on mood + taste context
-        4. Verify LLM recommendations exist in database
-        5. Fallback to database search if needed
-        
-        Args:
-            user_request: Natural language request from user
-            
-        Returns:
-            HTML formatted recommendation response
-        """
-        if not self._llm:
-            return "LLM is required for mood-aware recommendations. Please enable LLM."
-        
-        # Step 1: Analyze user's emotional context with BERT
-        mood_data = mood_analyzer.analyze_emotion(user_request)
-        primary_emotion = mood_data["primary_emotion"]
-        music_mood = mood_data["music_mood"]
-        
-        # Print BERT emotion detection results
-        print("\n" + "="*60)
-        print("🎭 BERT EMOTION ANALYSIS")
-        print("="*60)
-        print(f"📝 User Input: '{user_request}'")
-        print(f"🎯 Primary Emotion: {primary_emotion}")
-        print(f"🎵 Music Mood: {music_mood}")
-        if mood_data['emotions']:
-            top_emotions = ', '.join([f"{e['label']}({e['score']:.2f})" for e in mood_data['emotions'][:3]])
-            print(f"🔑 Top Emotions: {top_emotions}")
-        print("="*60 + "\n")
-        
-        # Track mood in session
-        self._session_context["moods"].append({
-            "emotion": primary_emotion,
-            "mood": music_mood,
-            "text": user_request
-        })
-        
-        # Step 2: Get user taste profile
-        taste_profile = self._get_user_taste_profile()
-        top_artists = taste_profile["top_artists"]
-        artist_preferences = taste_profile["artist_preferences"]
-        
-        print("👤 USER TASTE PROFILE")
-        print(f"   Top Artists: {', '.join(top_artists) if top_artists else 'None yet'}")
-        print(f"   Total Interactions: {sum(self._session_context['artists'].values())}")
-        
-        # Step 2.5: R7.1.3 - Automatic context detection
-        auto_context = self._detect_automatic_context()
-        time_context = auto_context["context_description"]
-        suggested_mood = auto_context["suggested_mood"]
-        
-        # Step 3: Get current playlist for context
-        current_playlist = self.playlists._current
-        playlist_songs = self.playlists.view(current_playlist) if current_playlist else []
-        if isinstance(playlist_songs, str):
-            playlist_songs = []
-        
-        # Format playlist context for LLM
-        playlist_context = ""
-        if playlist_songs:
-            playlist_artists = {}
-            for song in playlist_songs[:20]:  # Limit to recent 20
-                artist = song.get("artist", "Unknown")
-                playlist_artists[artist] = playlist_artists.get(artist, 0) + 1
-            
-            playlist_context = "User's current playlist:\n"
-            for artist, count in sorted(playlist_artists.items(), key=lambda x: x[1], reverse=True)[:10]:
-                playlist_context += f"  - {artist} ({count} song{'s' if count > 1 else ''})\n"
-        
-        # Step 4: Ask LLM to recommend songs
-        print("🤖 ASKING LLM FOR RECOMMENDATIONS...")
-        
-        llm_prompt = f"""
-        You are a music recommendation expert. Based on the user's emotional state and musical taste, recommend 20 songs.
-
-        IMPORTANT DATABASE CONSTRAINT:
-        - The song database contains playlists from Spotify created between JANUARY 2010 and NOVEMBER 2017
-        - DO NOT recommend songs released after November 2017
-        - Only recommend songs that existed on Spotify by November 2017
-        - Focus on songs from 2010-2017 or earlier
-
-        EMOTION ANALYSIS (from BERT):
-        - Primary Emotion: {primary_emotion}
-        - Music Mood: {music_mood}
-        - User Request: "{user_request}"
-
-        AUTOMATIC CONTEXT (R7.1.3 - Time & Behavioral Patterns):
-        - Current Context: {time_context}
-        - Time-Based Suggestion: {suggested_mood} music recommended for this time
-        - Consider this context when making recommendations
-
-        USER'S TASTE PROFILE:
-        {playlist_context if playlist_context else "No playlist history yet"}
-        Top Artists: {', '.join(top_artists) if top_artists else 'No preferences yet'}
-        Artist Interaction Counts: {', '.join([f'{a}({c})' for a, c in sorted(artist_preferences.items(), key=lambda x: x[1], reverse=True)[:5]]) if artist_preferences else 'None'}
-
-        TASK:
-        Recommend 20 songs that match:
-        1. The user's requested mood ({music_mood})
-        2. The automatic time-based context ({suggested_mood} for {time_context})
-        3. The user's taste profile
-        4. Songs that existed by November 2017 (database constraint)
-
-        CRITICAL RULES:
-        1. ONLY recommend songs released before December 2017
-        2. Balance user's explicit mood request with time-appropriate suggestions
-        3. If user has favorite artists, PRIORITIZE songs from those artists that match the mood
-        4. Match the emotional tone: {primary_emotion} / {music_mood}
-        5. Consider the time of day context for appropriate energy levels
-        6. Include variety but stay within the user's taste preferences
-        7. Return ONLY a JSON array with this exact format:
-
-        [
-        {{"artist": "Artist Name", "title": "Song Title", "reason": "brief explanation"}},
-        {{"artist": "Artist Name", "title": "Song Title", "reason": "brief explanation"}},
-        ...
-        ]
-
-        IMPORTANT: 
-        - If user likes metal, recommend metal songs matching the mood (e.g., romantic metal, sad metal)
-        - If user has no preferences, recommend popular songs matching the mood
-        - Output ONLY the JSON array, no other text
-        - Ensure artist and title are spelled correctly
-        - Remember: Database only has songs available on Spotify up to November 2017"""
-        
-        # Step 5: Get LLM recommendations
-        llm_response = self._llm.ask(llm_prompt)
-        
-        # Step 6: Parse LLM response
-        llm_recommendations = []
-        try:
-            # Try to extract JSON from response
-            json_match = re.search(r'\[\s*\{.*\}\s*\]', llm_response, re.DOTALL)
-            if json_match:
-                llm_recommendations = json.loads(json_match.group(0))
-                print(f"✅ LLM suggested {len(llm_recommendations)} songs")
-            else:
-                print(f"⚠️ Could not parse JSON from LLM response")
-                print(f"Response: {llm_response[:200]}...")
-        except Exception as e:
-            print(f"❌ Error parsing LLM response: {e}")
-        
-        # Step 7: Verify songs in database
-        verified_songs = []
-        for idx, song_data in enumerate(llm_recommendations, 1):
-            artist = song_data.get("artist", "").strip()
-            title = song_data.get("title", "").strip()
-            reason = song_data.get("reason", "")
-            
-            if not artist or not title:
-                continue
-            
-            # Check if song exists in database
-            db_result = find_song_in_db(artist, title)
-            
-            if db_result:
-                verified_songs.append({
-                    "artist": artist,
-                    "title": title,
-                    "reason": reason,
-                    "source": "llm"
-                })
-                print(f"   ✓ Found: {artist} - {title}")
-            else:
-                print(f"   ✗ Not in DB: {artist} - {title}")
-            
-            # Limit to 10 verified songs
-            if len(verified_songs) >= 10:
-                break
-        
-        print(f"\n📊 RESULTS: {len(verified_songs)}/10 songs verified in database\n")
-        
-        # Step 8: Fallback to database search if not enough verified songs
-        if len(verified_songs) < 5:
-            print("⚠️ Not enough LLM songs in database, falling back to keyword search...")
-            
-            mood_keywords = mood_analyzer.get_mood_keywords(mood_data)
-            fallback_songs = search_tracks_by_keywords(
-                mood_keywords,
-                limit=10
-            )
-            
-            # Add fallback songs to fill the gap
-            for song in fallback_songs:
-                if len(verified_songs) >= 10:
-                    break
-                
-                # Don't duplicate
-                key = f"{song['artist']}::{song['title']}"
-                if not any(f"{s['artist']}::{s['title']}" == key for s in verified_songs):
-                    verified_songs.append({
-                        "artist": song["artist"],
-                        "title": song["title"],
-                        "reason": f"Matches {music_mood} mood",
-                        "source": "fallback"
-                    })
-            
-            print(f"   Added {len([s for s in verified_songs if s['source'] == 'fallback'])} fallback songs")
-        
-        if not verified_songs:
-            return f"I couldn't find songs matching your mood ({music_mood}). Try adding songs to your playlist first or be more specific."
-        
-        # Step 9: Format response
-        response_lines = []
-        
-        # Mood explanation with automatic context (R7.1.3)
-        emotion_desc = f"detected {primary_emotion}" if primary_emotion != "neutral" else "neutral mood"
-        taste_desc = f"your taste for {', '.join(top_artists)}" if top_artists else "the vibe you're looking for"
-        
-        # Include automatic context in explanation
-        response_lines.append(f"<strong>🎭 Based on {emotion_desc}, {taste_desc}, and {time_context}:</strong><br><br>")
-        
-        # Recommendations with explanations
-        for idx, rec in enumerate(verified_songs, 1):
-            artist = rec["artist"]
-            title = rec["title"]
-            reason = rec["reason"]
-            source = rec.get("source", "llm")
-            
-            # Format explanation
-            explanation = reason if reason else f"Matches {music_mood} mood"
-            if artist in top_artists and "favorite" not in explanation.lower():
-                explanation += f" (one of your favorites)"
-            
-            source_icon = "🤖" if source == "llm" else "🔍"
-            
-            response_lines.append(
-                f"{idx}. <strong>{artist}</strong>: {title}<br>"
-                f"   <em>{source_icon} {explanation}</em><br>"
-            )
-        
-        response_lines.append(
-            f"<br><em>Use '/pl select 1 2 3' to add songs to your playlist.</em>"
-        )
-        
-        # Store for selection
-        self.playlists._recommendation_cache = [
-            {"artist": r["artist"], "title": r["title"]}
-            for r in verified_songs
-        ]
-        
-        return "".join(response_lines)
 
     def welcome(self) -> None:
         """Sends the agent's welcome message."""
@@ -1079,6 +746,339 @@ class MusicCRS(Agent):
     def _qa_help(self) -> str:
         """Return QA command help text."""
         return get_qa_help()
+    
+    # Session context tracking
+    def _track_song_interaction(self, artist: str, title: str):
+        """Track user interactions with songs for personality profiling.
+        
+        Args:
+            artist: Artist name
+            title: Song title
+        """
+        # Update artist preference counter
+        self._session_context["artists"][artist] += 1
+        
+        # Track recent songs (keep last 20)
+        self._session_context["recent_songs"].append({
+            "artist": artist,
+            "title": title
+        })
+        if len(self._session_context["recent_songs"]) > 20:
+            self._session_context["recent_songs"].pop(0)
+    
+    def _get_user_taste_profile(self) -> dict:
+        """Build user taste profile from session context.
+        
+        Returns:
+            dict with:
+                - top_artists: List of top 3 artists
+                - artist_preferences: All artist counts
+        """
+        top_artists = [
+            artist for artist, _ in 
+            self._session_context["artists"].most_common(3)
+        ]
+        
+        return {
+            "top_artists": top_artists,
+            "artist_preferences": dict(self._session_context["artists"])
+        }
+    
+    def _detect_automatic_context(self) -> dict:
+        """R7.1.3: Automatic context detection based on time of day and previous behavior.
+        
+        Returns:
+            dict with:
+                - time_of_day: morning/afternoon/evening/night
+                - suggested_mood: Mood suggestion based on time
+                - context_description: Human-readable context description
+        """
+        current_hour = datetime.now().hour
+        
+        # Time of day detection
+        if 5 <= current_hour < 12:
+            time_of_day = "morning"
+            suggested_mood = "energetic"
+            context_desc = "morning energy boost"
+        elif 12 <= current_hour < 17:
+            time_of_day = "afternoon"
+            suggested_mood = "upbeat"
+            context_desc = "afternoon productivity"
+        elif 17 <= current_hour < 21:
+            time_of_day = "evening"
+            suggested_mood = "relaxing"
+            context_desc = "evening wind-down"
+        else:  # 21-5
+            time_of_day = "night"
+            suggested_mood = "calm"
+            context_desc = "late-night chill"
+        
+        # Analyze behavioral patterns
+        recent_moods = self._session_context["moods"][-10:]  # Last 10 mood requests
+        if recent_moods:
+            mood_counter = Counter(m["mood"] for m in recent_moods)
+            most_common_mood = mood_counter.most_common(1)[0][0]
+            context_desc += f", you often enjoy {most_common_mood} music"
+        
+        print(f"\n⏰ AUTOMATIC CONTEXT DETECTION (R7.1.3)")
+        print(f"   Time: {time_of_day} ({current_hour}:00)")
+        print(f"   Suggested Mood: {suggested_mood}")
+        print(f"   Context: {context_desc}\n")
+        
+        return {
+            "time_of_day": time_of_day,
+            "suggested_mood": suggested_mood,
+            "context_description": context_desc
+        }
+    
+    def _recommend_with_mood_and_taste(self, user_request: str) -> str:
+        """R7.1: LLM-based mood and personality-aware recommendation.
+        
+        NEW APPROACH:
+        1. Analyze emotion with BERT
+        2. Get user's taste profile from session
+        3. Ask LLM to recommend songs based on mood + taste context
+        4. Verify LLM recommendations exist in database
+        5. Fallback to database search if needed
+        
+        Args:
+            user_request: Natural language request from user
+            
+        Returns:
+            HTML formatted recommendation response
+        """
+        if not self._llm:
+            return "LLM is required for mood-aware recommendations. Please enable LLM."
+        
+        # Step 1: Analyze user's emotional context with BERT
+        mood_data = mood_analyzer.analyze_emotion(user_request)
+        primary_emotion = mood_data["primary_emotion"]
+        music_mood = mood_data["music_mood"]
+        
+        # Print BERT emotion detection results
+        print("\n" + "="*60)
+        print("🎭 BERT EMOTION ANALYSIS")
+        print("="*60)
+        print(f"📝 User Input: '{user_request}'")
+        print(f"🎯 Primary Emotion: {primary_emotion}")
+        print(f"🎵 Music Mood: {music_mood}")
+        if mood_data['emotions']:
+            top_emotions = ', '.join([f"{e['label']}({e['score']:.2f})" for e in mood_data['emotions'][:3]])
+            print(f"🔑 Top Emotions: {top_emotions}")
+        print("="*60 + "\n")
+        
+        # Track mood in session
+        self._session_context["moods"].append({
+            "emotion": primary_emotion,
+            "mood": music_mood,
+            "text": user_request
+        })
+        
+        # Step 2: Get user taste profile
+        taste_profile = self._get_user_taste_profile()
+        top_artists = taste_profile["top_artists"]
+        artist_preferences = taste_profile["artist_preferences"]
+        
+        print("👤 USER TASTE PROFILE")
+        print(f"   Top Artists: {', '.join(top_artists) if top_artists else 'None yet'}")
+        print(f"   Total Interactions: {sum(self._session_context['artists'].values())}")
+        
+        # Step 2.5: R7.1.3 - Automatic context detection
+        auto_context = self._detect_automatic_context()
+        time_context = auto_context["context_description"]
+        suggested_mood = auto_context["suggested_mood"]
+        
+        # Step 3: Get current playlist for context
+        current_playlist = self.playlists._current
+        playlist_songs = self.playlists.view(current_playlist) if current_playlist else []
+        if isinstance(playlist_songs, str):
+            playlist_songs = []
+        
+        # Format playlist context for LLM
+        playlist_context = ""
+        if playlist_songs:
+            playlist_artists = {}
+            for song in playlist_songs[:20]:  # Limit to recent 20
+                artist = song.get("artist", "Unknown")
+                playlist_artists[artist] = playlist_artists.get(artist, 0) + 1
+            
+            playlist_context = "User's current playlist:\n"
+            for artist, count in sorted(playlist_artists.items(), key=lambda x: x[1], reverse=True)[:10]:
+                playlist_context += f"  - {artist} ({count} song{'s' if count > 1 else ''})\n"
+        
+        # Step 4: Ask LLM to recommend songs
+        print("🤖 ASKING LLM FOR RECOMMENDATIONS...")
+        
+        llm_prompt = f"""
+        You are a music recommendation expert. Based on the user's emotional state and musical taste, recommend 20 songs.
+
+        IMPORTANT DATABASE CONSTRAINT:
+        - The song database contains playlists from Spotify created between JANUARY 2010 and NOVEMBER 2017
+        - DO NOT recommend songs released after November 2017
+        - Only recommend songs that existed on Spotify by November 2017
+        - Focus on songs from 2010-2017 or earlier
+
+        EMOTION ANALYSIS (from BERT):
+        - Primary Emotion: {primary_emotion}
+        - Music Mood: {music_mood}
+        - User Request: "{user_request}"
+
+        AUTOMATIC CONTEXT (R7.1.3 - Time & Behavioral Patterns):
+        - Current Context: {time_context}
+        - Time-Based Suggestion: {suggested_mood} music recommended for this time
+        - Consider this context when making recommendations
+
+        USER'S TASTE PROFILE:
+        {playlist_context if playlist_context else "No playlist history yet"}
+        Top Artists: {', '.join(top_artists) if top_artists else 'No preferences yet'}
+        Artist Interaction Counts: {', '.join([f'{a}({c})' for a, c in sorted(artist_preferences.items(), key=lambda x: x[1], reverse=True)[:5]]) if artist_preferences else 'None'}
+
+        TASK:
+        Recommend 20 songs that match:
+        1. The user's requested mood ({music_mood})
+        2. The automatic time-based context ({suggested_mood} for {time_context})
+        3. The user's taste profile
+        4. Songs that existed by November 2017 (database constraint)
+
+        CRITICAL RULES:
+        1. ONLY recommend songs released before December 2017
+        2. Balance user's explicit mood request with time-appropriate suggestions
+        3. If user has favorite artists, PRIORITIZE songs from those artists that match the mood
+        4. Match the emotional tone: {primary_emotion} / {music_mood}
+        5. Consider the time of day context for appropriate energy levels
+        6. Include variety but stay within the user's taste preferences
+        7. Return ONLY a JSON array with this exact format:
+
+        [
+        {{"artist": "Artist Name", "title": "Song Title", "reason": "brief explanation"}},
+        {{"artist": "Artist Name", "title": "Song Title", "reason": "brief explanation"}},
+        ...
+        ]
+
+        IMPORTANT: 
+        - If user likes metal, recommend metal songs matching the mood (e.g., romantic metal, sad metal)
+        - If user has no preferences, recommend popular songs matching the mood
+        - Output ONLY the JSON array, no other text
+        - Ensure artist and title are spelled correctly
+        - Remember: Database only has songs available on Spotify up to November 2017"""
+        
+        # Step 5: Get LLM recommendations
+        llm_response = self._llm.ask(llm_prompt)
+        
+        # Step 6: Parse LLM response
+        llm_recommendations = []
+        try:
+            # Try to extract JSON from response
+            json_match = re.search(r'\[\s*\{.*\}\s*\]', llm_response, re.DOTALL)
+            if json_match:
+                llm_recommendations = json.loads(json_match.group(0))
+                print(f"✅ LLM suggested {len(llm_recommendations)} songs")
+            else:
+                print(f"⚠️ Could not parse JSON from LLM response")
+                print(f"Response: {llm_response[:200]}...")
+        except Exception as e:
+            print(f"❌ Error parsing LLM response: {e}")
+        
+        # Step 7: Verify songs in database
+        verified_songs = []
+        for idx, song_data in enumerate(llm_recommendations, 1):
+            artist = song_data.get("artist", "").strip()
+            title = song_data.get("title", "").strip()
+            reason = song_data.get("reason", "")
+            
+            if not artist or not title:
+                continue
+            
+            # Check if song exists in database
+            db_result = find_song_in_db(artist, title)
+            
+            if db_result:
+                verified_songs.append({
+                    "artist": artist,
+                    "title": title,
+                    "reason": reason,
+                    "source": "llm"
+                })
+                print(f"   ✓ Found: {artist} - {title}")
+            else:
+                print(f"   ✗ Not in DB: {artist} - {title}")
+            
+            # Limit to 10 verified songs
+            if len(verified_songs) >= 10:
+                break
+        
+        print(f"\n📊 RESULTS: {len(verified_songs)}/10 songs verified in database\n")
+        
+        # Step 8: Fallback to database search if not enough verified songs
+        if len(verified_songs) < 5:
+            print("⚠️ Not enough LLM songs in database, falling back to keyword search...")
+            
+            mood_keywords = mood_analyzer.get_mood_keywords(mood_data)
+            fallback_songs = search_tracks_by_keywords(
+                mood_keywords,
+                limit=10
+            )
+            
+            # Add fallback songs to fill the gap
+            for song in fallback_songs:
+                if len(verified_songs) >= 10:
+                    break
+                
+                # Don't duplicate
+                key = f"{song['artist']}::{song['title']}"
+                if not any(f"{s['artist']}::{s['title']}" == key for s in verified_songs):
+                    verified_songs.append({
+                        "artist": song["artist"],
+                        "title": song["title"],
+                        "reason": f"Matches {music_mood} mood",
+                        "source": "fallback"
+                    })
+            
+            print(f"   Added {len([s for s in verified_songs if s['source'] == 'fallback'])} fallback songs")
+        
+        if not verified_songs:
+            return f"I couldn't find songs matching your mood ({music_mood}). Try adding songs to your playlist first or be more specific."
+        
+        # Step 9: Format response
+        response_lines = []
+        
+        # Mood explanation with automatic context (R7.1.3)
+        emotion_desc = f"detected {primary_emotion}" if primary_emotion != "neutral" else "neutral mood"
+        taste_desc = f"your taste for {', '.join(top_artists)}" if top_artists else "the vibe you're looking for"
+        
+        # Include automatic context in explanation
+        response_lines.append(f"<strong>🎭 Based on {emotion_desc}, {taste_desc}, and {time_context}:</strong><br><br>")
+        
+        # Recommendations with explanations
+        for idx, rec in enumerate(verified_songs, 1):
+            artist = rec["artist"]
+            title = rec["title"]
+            reason = rec["reason"]
+            source = rec.get("source", "llm")
+            
+            # Format explanation
+            explanation = reason if reason else f"Matches {music_mood} mood"
+            if artist in top_artists and "favorite" not in explanation.lower():
+                explanation += f" (one of your favorites)"
+            
+            source_icon = "🤖" if source == "llm" else "🔍"
+            
+            response_lines.append(
+                f"{idx}. <strong>{artist}</strong>: {title}<br>"
+                f"   <em>{source_icon} {explanation}</em><br>"
+            )
+        
+        response_lines.append(
+            f"<br><em>Use '/pl select 1 2 3' to add songs to your playlist.</em>"
+        )
+        
+        # Store for selection
+        self.playlists._recommendation_cache = [
+            {"artist": r["artist"], "title": r["title"]}
+            for r in verified_songs
+        ]
+        
+        return "".join(response_lines)
 
     def _format_duration(self, duration_ms: int | None) -> str:
         if not duration_ms or duration_ms <= 0:

@@ -206,24 +206,50 @@ class PlaylistManager:
         if not self._recommendation_cache:
             return "No recommendations to choose from. Use '/pl recommend' first."
 
-        rec, recommended_data = self._recommendation_cache  # unpack tuple
-        added_songs = []
+        # Handle both cache formats: tuple (collaborative) or list (mood-aware)
+        if isinstance(self._recommendation_cache, tuple):
+            # Collaborative filtering: (rec_dict, recommended_data)
+            rec, recommended_data = self._recommendation_cache
+            added_songs = []
 
-        for idx in indices:
-            if idx < 1 or idx > len(recommended_data):
-                return f"Please choose numbers between 1 and {len(recommended_data)}."
+            for idx in indices:
+                if idx < 1 or idx > len(recommended_data):
+                    return f"Please choose numbers between 1 and {len(recommended_data)}."
 
-            song_id, _ = recommended_data[idx - 1]
-            song_info = rec[song_id]  # "Artist : Title"
-            artist, title = song_info.split(" : ", 1)
-            arg = f"{artist}:{title}"
-            self.add_song(arg)
-            added_songs.append(song_info)
+                song_id, _ = recommended_data[idx - 1]
+                song_info = rec[song_id]  # "Artist : Title"
+                artist, title = song_info.split(" : ", 1)
+                arg = f"{artist}:{title}"
+                self.add_song(arg)
+                added_songs.append(song_info)
 
-        if added_songs:
-            return "Added: <br>" + "<br>".join(added_songs)
+            if added_songs:
+                return "Added: <br>" + "<br>".join(added_songs)
+            else:
+                return "No songs added."
+        
+        elif isinstance(self._recommendation_cache, list):
+            # Mood-aware R7.1: list of {"artist": ..., "title": ...}
+            added_songs = []
+
+            for idx in indices:
+                if idx < 1 or idx > len(self._recommendation_cache):
+                    return f"Please choose numbers between 1 and {len(self._recommendation_cache)}."
+
+                song = self._recommendation_cache[idx - 1]
+                artist = song["artist"]
+                title = song["title"]
+                arg = f"{artist}:{title}"
+                self.add_song(arg)
+                added_songs.append(f"{artist} : {title}")
+
+            if added_songs:
+                return "Added: <br>" + "<br>".join(added_songs)
+            else:
+                return "No songs added."
+        
         else:
-            return "No songs added."
+            return "Invalid recommendation cache format."
 
     def get_summary(self, playlist: str | None = None, format_duration_func=None) -> str:
         """Generate a detailed summary of a playlist.

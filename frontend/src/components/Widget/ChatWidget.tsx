@@ -1,17 +1,11 @@
 import "./ChatWidget.css";
 import { useState, MouseEvent, ReactNode } from "react";
 import { MDBIcon } from "mdb-react-ui-kit";
-<<<<<<< HEAD
 import Playlist from "../Playlist/Playlist";
 
 export default function ChatWidget({ children }: { children: ReactNode }) {
   const [isChatBoxOpen, setIsChatBoxOpen] = useState<boolean>(false);
   const [tab, setTab] = useState<"chat" | "playlist">("chat");
-=======
-
-export default function ChatWidget({ children }: { children: ReactNode }) {
-  const [isChatBoxOpen, setIsChatBoxOpen] = useState<boolean>(false);
->>>>>>> upstream/main
 
   function handleClick(event: MouseEvent<HTMLAnchorElement>) {
     setIsChatBoxOpen(isChatBoxOpen ? false : true);
@@ -24,7 +18,6 @@ export default function ChatWidget({ children }: { children: ReactNode }) {
           <MDBIcon fas icon="robot" />
         </a>
       </div>
-<<<<<<< HEAD
       <div className="chat-widget-box">
         {isChatBoxOpen && (
           <div className="d-flex flex-column" style={{ height: "100%" }}>
@@ -48,9 +41,6 @@ export default function ChatWidget({ children }: { children: ReactNode }) {
           </div>
         )}
       </div>
-=======
-      <div className="chat-widget-box">{isChatBoxOpen && children}</div>
->>>>>>> upstream/main
     </div>
   );
 }

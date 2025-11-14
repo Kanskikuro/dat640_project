@@ -399,7 +399,7 @@ class MusicCRS(Agent):
         
         recommendation_enum = []
         if self.playlists._recommendation_cache:
-            # Handle both cache formats: tuple (collaborative) or list (mood-aware)
+            # Handle both cache formats: tuple (collaborative) or list (mood-aware/hybrid)
             if isinstance(self.playlists._recommendation_cache, tuple):
                 # Collaborative filtering: (rec_dict, recommended_data)
                 rec, recommended_data = self.playlists._recommendation_cache 
@@ -408,11 +408,19 @@ class MusicCRS(Agent):
                     for i, (song_id, freq) in enumerate(recommended_data) if song_id in rec
                 ]
             elif isinstance(self.playlists._recommendation_cache, list):
-                # Mood-aware: list of {"artist": ..., "title": ...}
-                recommendation_enum = [
-                    f"{i+1}. {song['artist']} : {song['title']}"
-                    for i, song in enumerate(self.playlists._recommendation_cache)
-                ]
+                # List format - could be hybrid or mood-aware
+                for i, song in enumerate(self.playlists._recommendation_cache):
+                    if isinstance(song, dict):
+                        if "song" in song:
+                            # Hybrid format: {"song": "Artist : Title", "score": ...}
+                            recommendation_enum.append(f"{i+1}. {song['song']}")
+                        elif "artist" in song and "title" in song:
+                            # Mood-aware format: {"artist": ..., "title": ...}
+                            recommendation_enum.append(f"{i+1}. {song['artist']} : {song['title']}")
+                        else:
+                            recommendation_enum.append(f"{i+1}. Unknown format")
+                    else:
+                        recommendation_enum.append(f"{i+1}. {str(song)}")
 
         prompt = f"""
     You are an intent parser using free natural language for a music playlist system.
@@ -491,11 +499,24 @@ class MusicCRS(Agent):
             idx_list = [i for i in idx_raw if isinstance(i, int) and i > 0]
         else:
             idx_list = []
+        
+        # FALLBACK: If idx is empty but intent is select/choose, try to parse numbers from text
+        if (intent in ["select", "choose"]) and not idx_list:
+            import re
+            # Extract numbers from the user's natural language text
+            numbers = re.findall(r'\b(\d+)\b', text)
+            if numbers:
+                idx_list = [int(n) for n in numbers if int(n) > 0]
+                print(f"🔧 Fallback: Extracted indices {idx_list} from text: '{text}'")
+        
         artist = data.get("artist", "") or ""
         song = data.get("song", "") or ""
         playlist_name = data.get("playlist_name", "") or ""
         description = data.get("description", "") or ""
         llm_reply_text = data.get("reply", "") or ""
+        
+        # Debug: Show what the LLM extracted
+        print(f"🔍 LLM extracted idx_raw: {idx_raw} → idx_list: {idx_list}")
         
         # Debug output
         print("LLM reply:", llm_reply)

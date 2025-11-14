@@ -1,4 +1,4 @@
-from db import find_songs_by_title, get_track_info, recommend_songs
+from db import find_songs_by_title, get_track_info, recommend_songs, hybrid_recommend
 from collections import Counter
 
 
@@ -187,18 +187,22 @@ class PlaylistManager:
             return "Playlist is empty or invalid."
 
         # Filter valid songs
-        songs = [song for song in playlist_list if "artist" in song and "title" in song]
+        songs = [song for song in playlist_list if "artist" in song and "title" in song and "id" in song]
         if not songs:
             return "No valid songs in the playlist."
 
-        # recommend_songs returns list of {"song": "Artist : Title", "score": float}
-        recommendations = recommend_songs(songs, limit=10)
+        # Extract song IDs for hybrid recommendation
+        song_ids = [song["id"] for song in songs]
+        
+        # Use hybrid_recommend for better quality (combines co-occurrence + cosine similarity)
+        # Returns list of {"song": "Artist : Title", "score": float}
+        recommendations = hybrid_recommend(song_ids, top_k=10, alpha=0.5)
         
         if recommendations:
             # Store in format that select_recommendations expects
             self._recommendation_cache = recommendations
             result = [
-                f"{i+1}. {rec['song']} (score: {rec['score']:.2f})"
+                f"{i+1}. {rec['song']} (score: {rec['score']:.3f})"
                 for i, rec in enumerate(recommendations)
             ]
             return "Recommendations:<br>" + "<br>".join(result) + "<br>Use '/pl select [numbers]' to add."

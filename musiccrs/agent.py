@@ -124,6 +124,9 @@ class MusicCRS(Agent):
         else:
             # Check if it's a question (natural language QA)
             response = self._handle_natural_language(utterance.text)
+            # If goodbye was called, return early to avoid sending another message
+            if response == "__GOODBYE__":
+                return
 
         self._dialogue_connector.register_agent_utterance(
             AnnotatedUtterance(
@@ -341,7 +344,7 @@ class MusicCRS(Agent):
         
         # Use LLM to classify intent
         classification_prompt = f"""
-            Classify the following user input as either "question" or "playlist_command" if not those two then "neither".
+            Classify the following user input as one of: "question", "playlist_command", "quit", or "neither".
 
             A "question" is when the user asks for information about with the qa commands and if they dont ask about the qa commands respond with the llm reply as "neither":
             - These are question types: 
@@ -356,11 +359,14 @@ class MusicCRS(Agent):
             - Add/remove songs, create playlists, view playlists, get recommendations, etc.
             - Examples: "Add Hey Jude", "Create a workout playlist", "Show my playlist"
 
-            When user input does not clearly fit either category, respond with "neither" then just return the llm response directly.
+            A "quit" is when the user wants to end the conversation:
+            - Examples: "goodbye", "bye", "exit", "quit", "see you later", "farewell"
+
+            When user input does not clearly fit any category, respond with "neither" then just return the llm response directly.
 
             User input: "{text}"
 
-            Respond with ONLY ONE WORD: either "question" or "playlist_command"
+            Respond with ONLY ONE WORD: either "question", "playlist_command", "quit", or "neither"
             """
         
         try:
@@ -371,6 +377,9 @@ class MusicCRS(Agent):
                 return self._handle_nl_qa(text)
             elif "playlist_command" in classification:
                 return self._handle_nl_playlist_intent(text)
+            elif "quit" in classification:
+                self.goodbye()
+                return "__GOODBYE__"
             elif "neither" in classification:
                 return self._llm.ask(text)
         except Exception as e:
@@ -426,13 +435,17 @@ class MusicCRS(Agent):
     You are an intent parser using free natural language for a music playlist system.
     Only output a single JSON object with no extra text.
     The JSON object must have the keys:
-    - "intent": one of ["create", "choose", "select", "remove", "switch", "view", "view_playlists", "clear", "add", "summary", "recommend", "auto"]
+    - "intent": one of ["create", "choose", "select", "remove", "switch", "view", "view_playlists", "clear", "add", "summary", "recommend", "auto", "quit"]
     - "song": the song title 
     - "artist": the artist name or empty string if not given.
     - "idx": the index number for choosing from multiple options (1-based)
     - "playlist_name": the playlist name or empty string if not given.
     - "description": for "auto" or "recommend" intent, the natural language description
     - "reply": the full text reply from you, the llm.
+    
+    CRITICAL - Detect goodbye/quit intent:
+    - Use "quit" when user says goodbye, bye, exit, quit, or similar farewell phrases
+    - Examples: "goodbye", "bye", "see you later", "exit", "quit"
     
     CRITICAL - Distinguish between "recommend" and "auto":
     - Use "recommend" when user wants to GET SUGGESTIONS/RECOMMENDATIONS to browse or add to EXISTING playlist
@@ -576,6 +589,9 @@ class MusicCRS(Agent):
                     cmd = f"{intent} {playlist_name}"
             case "auto":
                 cmd = f"{intent} {description}"
+            case "quit":
+                self.goodbye()
+                return "__GOODBYE__"
             case _:
                 return "No intent matched, here's your LLM reply: " + llm_reply_text if llm_reply_text else "I didn't understand that command."
 

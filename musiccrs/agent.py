@@ -266,23 +266,21 @@ class MusicCRS(Agent):
                 res = self.playlists.select_recommendations(indices)
                 # Track selected songs
                 cache = getattr(self.playlists, "_recommendation_cache", None)
-                if cache:
-                    # Handle both cache formats
-                    if isinstance(cache, tuple):
-                        # Regular collaborative filtering: (rec_dict, recommended_data)
-                        rec, recommended_data = cache
-                        for idx in indices:
-                            if 0 < idx <= len(recommended_data):
-                                song_id, _ = recommended_data[idx - 1]
-                                song_info = rec[song_id]  # "Artist : Title"
-                                artist, title = song_info.split(" : ", 1)
-                                self._track_song_interaction(artist, title)
-                    elif isinstance(cache, list):
-                        # Mood-aware: list of {"artist": ..., "title": ...}
-                        for idx in indices:
-                            if 0 < idx <= len(cache):
-                                song = cache[idx - 1]
-                                self._track_song_interaction(song["artist"], song["title"])
+                if cache and isinstance(cache, list):
+                    for idx in indices:
+                        if 0 < idx <= len(cache):
+                            rec_item = cache[idx - 1]
+                            # Handle different cache formats
+                            if isinstance(rec_item, dict):
+                                if "song" in rec_item:
+                                    # Format: {"song": "Artist : Title", "score": ...}
+                                    song_info = rec_item["song"]
+                                    if " : " in song_info:
+                                        artist, title = song_info.split(" : ", 1)
+                                        self._track_song_interaction(artist, title)
+                                elif "artist" in rec_item and "title" in rec_item:
+                                    # Format: {"artist": ..., "title": ...}
+                                    self._track_song_interaction(rec_item["artist"], rec_item["title"])
                 self._emit_songs_for_current()
                 if hasattr(self.playlists, "view_playlists"):
                     self._emit_pl("playlists", self.playlists.view_playlists())

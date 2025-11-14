@@ -191,57 +191,58 @@ class PlaylistManager:
         if not songs:
             return "No valid songs in the playlist."
 
-        rec , recommended_data = recommend_songs(songs)
-        if rec:
-            self._recommendation_cache = rec , recommended_data
+        # recommend_songs returns list of {"song": "Artist : Title", "score": float}
+        recommendations = recommend_songs(songs, limit=10)
+        
+        if recommendations:
+            # Store in format that select_recommendations expects
+            self._recommendation_cache = recommendations
             result = [
-                f"{i+1}. {rec[song_id]} (song appears in {freq} playlists)"
-                for i, (song_id, freq) in enumerate(recommended_data) if song_id in rec
+                f"{i+1}. {rec['song']} (score: {rec['score']:.2f})"
+                for i, rec in enumerate(recommendations)
             ]
-            return "Recommends:<br>" + "<br>".join(result) + "<br>Use '/pl select [numbers]' to add."
+            return "Recommendations:<br>" + "<br>".join(result) + "<br>Use '/pl select [numbers]' to add."
         else:
-                return "No recommendations found."
+            return "No recommendations found."
              
     def select_recommendations(self, indices: list[int]) -> str:
         if not self._recommendation_cache:
             return "No recommendations to choose from. Use '/pl recommend' first."
 
-        # Handle both cache formats: tuple (collaborative) or list (mood-aware)
-        if isinstance(self._recommendation_cache, tuple):
-            # Collaborative filtering: (rec_dict, recommended_data)
-            rec, recommended_data = self._recommendation_cache
-            added_songs = []
-
-            for idx in indices:
-                if idx < 1 or idx > len(recommended_data):
-                    return f"Please choose numbers between 1 and {len(recommended_data)}."
-
-                song_id, _ = recommended_data[idx - 1]
-                song_info = rec[song_id]  # "Artist : Title"
-                artist, title = song_info.split(" : ", 1)
-                arg = f"{artist}:{title}"
-                self.add_song(arg)
-                added_songs.append(song_info)
-
-            if added_songs:
-                return "Added: <br>" + "<br>".join(added_songs)
-            else:
-                return "No songs added."
-        
-        elif isinstance(self._recommendation_cache, list):
-            # Mood-aware R7.1: list of {"artist": ..., "title": ...}
+        # Handle list format: [{"song": "Artist : Title", "score": float}, ...]
+        if isinstance(self._recommendation_cache, list):
             added_songs = []
 
             for idx in indices:
                 if idx < 1 or idx > len(self._recommendation_cache):
                     return f"Please choose numbers between 1 and {len(self._recommendation_cache)}."
 
-                song = self._recommendation_cache[idx - 1]
-                artist = song["artist"]
-                title = song["title"]
+                rec_item = self._recommendation_cache[idx - 1]
+                
+                # Handle different cache formats
+                if isinstance(rec_item, dict):
+                    if "song" in rec_item:
+                        # Format: {"song": "Artist : Title", "score": ...}
+                        song_info = rec_item["song"]
+                        if " : " in song_info:
+                            artist, title = song_info.split(" : ", 1)
+                        else:
+                            # Fallback if separator is different
+                            parts = song_info.split(":", 1)
+                            artist, title = parts[0].strip(), parts[1].strip() if len(parts) > 1 else song_info
+                    elif "artist" in rec_item and "title" in rec_item:
+                        # Format: {"artist": ..., "title": ...}
+                        artist = rec_item["artist"]
+                        title = rec_item["title"]
+                        song_info = f"{artist} : {title}"
+                    else:
+                        continue
+                else:
+                    continue
+                
                 arg = f"{artist}:{title}"
-                self.add_song(arg)
-                added_songs.append(f"{artist} : {title}")
+                result = self.add_song(arg)
+                added_songs.append(song_info)
 
             if added_songs:
                 return "Added: <br>" + "<br>".join(added_songs)

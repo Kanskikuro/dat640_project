@@ -31,6 +31,13 @@ def ensure_indexes_once():
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_playlist_songs_song_playlist ON playlist_songs(song_id, playlist_id)"
         )
+        # Critical for recommendation queries - covers both directions
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_playlist_songs_playlist_song ON playlist_songs(playlist_id, song_id)"
+        )
+        cursor.execute(
+            "CREATE INDEX IF NOT EXISTS idx_playlist_songs_song ON playlist_songs(song_id)"
+        )
         # Add index on playlist names for fast auto-playlist search
         cursor.execute(
             "CREATE INDEX IF NOT EXISTS idx_playlists_name ON playlists(name COLLATE NOCASE)"
@@ -438,15 +445,7 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[dict]:
     conn = sqlite3.connect(DB_PATH, timeout=30)
     cur = conn.cursor()
 
-    # Indexing
-    cur.executescript("""
-        CREATE INDEX IF NOT EXISTS idx_playlist_songs_song 
-        ON playlist_songs(song_id);
-        CREATE INDEX IF NOT EXISTS idx_playlist_songs_playlist 
-        ON playlist_songs(playlist_id);
-    """)
-    conn.commit()
-
+    # Find playlists containing seed songs (limited to prevent slowdown)
     placeholders = ",".join("?" for _ in song_ids)
     playlist_query = f"""
         SELECT DISTINCT playlist_id
@@ -456,10 +455,12 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[dict]:
     """
     cur.execute(playlist_query, song_ids)
     playlist_ids = [row[0] for row in cur.fetchall()]
+    
     if not playlist_ids:
         conn.close()
         return []
 
+    # Find songs in those playlists (excluding seeds)
     placeholders_pl = ",".join("?" for _ in playlist_ids)
     query = f"""
         SELECT ps2.song_id, COUNT(*) AS freq
@@ -473,118 +474,187 @@ def recommend_songs(song_entries: list[dict], limit: int = 5) -> list[dict]:
     params = playlist_ids + song_ids + [limit]
     cur.execute(query, params)
     recommended_data = cur.fetchall()
+    
     if not recommended_data:
         conn.close()
         return []
 
+    # Fetch song details
     recommended_ids = [row[0] for row in recommended_data]
     max_freq = max(row[1] for row in recommended_data)
-    placeholders = ",".join("?" for _ in recommended_ids)
+    id_placeholders = ",".join("?" for _ in recommended_ids)
+    
     cur.execute(f"""
         SELECT id, title, artist 
         FROM songs 
-        WHERE id IN ({placeholders})
+        WHERE id IN ({id_placeholders})
     """, recommended_ids)
     songs_info = {row[0]: f"{row[2]} : {row[1]}" for row in cur.fetchall()}
 
     conn.close()
 
     # Normalize freq to [0,1]
-    return [{"song": songs_info[sid], "score": freq/max_freq} for sid, freq in recommended_data]
+    return [{"song": songs_info.get(sid, f"Unknown (ID: {sid})"), "score": freq / max_freq} 
+            for sid, freq in recommended_data if sid in songs_info]
 
 
 # --------------------------- Embedding-based recommendations -----------
-def recommend_by_playlist_cosine(seed_song_ids: list[int], limit: int = 10, chunk_size=500):
-    """Recommend songs similar to seed songs using playlist co-occurrence (cosine sim)."""
+def recommend_by_playlist_cosine(seed_song_ids: list[int], limit: int = 10, max_playlists: int = 5000):
+    """Recommend songs similar to seed songs using playlist co-occurrence (cosine sim).
+    
+    Optimized approach:
+    1. Fetch playlists containing seed songs (limited to top playlists)
+    2. Use SQL to aggregate co-occurrence counts
+    3. Compute cosine similarity with set operations in Python for top candidates only
+    
+    Args:
+        seed_song_ids: List of song IDs to base recommendations on
+        limit: Number of recommendations to return
+        max_playlists: Maximum number of playlists to consider (prevents slowdown on popular songs)
+    """
     if not seed_song_ids:
         return []
 
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
 
-    # --- Step 1: Get playlists for seeds ---
-    all_seed_playlists = set()
-    seed_playlists_map = {}
-    for batch in [seed_song_ids[i:i+chunk_size] for i in range(0, len(seed_song_ids), chunk_size)]:
-        placeholders = ",".join("?" for _ in batch)
-        cur.execute(f"SELECT song_id, playlist_id FROM playlist_songs WHERE song_id IN ({placeholders})", batch)
-        for song_id, pl_id in cur.fetchall():
-            seed_playlists_map.setdefault(song_id, set()).add(pl_id)
-            all_seed_playlists.add(pl_id)
-
-    if not all_seed_playlists:
+    # --- Step 1: Get playlists containing seed songs (limited) ---
+    placeholders = ",".join("?" for _ in seed_song_ids)
+    cur.execute(f"""
+        SELECT DISTINCT playlist_id
+        FROM playlist_songs
+        WHERE song_id IN ({placeholders})
+        LIMIT ?
+    """, seed_song_ids + [max_playlists])
+    
+    seed_playlists = [row[0] for row in cur.fetchall()]
+    if not seed_playlists:
         conn.close()
         return []
 
-    # --- Step 2: Get candidate songs in these playlists ---
-    song_playlists_map = {}
-    all_seed_playlists = list(all_seed_playlists)
-    for batch in [all_seed_playlists[i:i+chunk_size] for i in range(0, len(all_seed_playlists), chunk_size)]:
-        placeholders = ",".join("?" for _ in batch)
-        cur.execute(f"""
-            SELECT song_id, playlist_id
-            FROM playlist_songs
-            WHERE playlist_id IN ({placeholders})
-              AND song_id NOT IN ({','.join('?' for _ in seed_song_ids)})
-        """, batch + seed_song_ids)
-        for song_id, pl_id in cur.fetchall():
-            song_playlists_map.setdefault(song_id, set()).add(pl_id)
+    num_seed_playlists = len(seed_playlists)
+
+    # --- Step 2: Get candidate songs with co-occurrence counts using SQL aggregation ---
+    pl_placeholders = ",".join("?" for _ in seed_playlists)
+    seed_placeholders = ",".join("?" for _ in seed_song_ids)
+    
+    # Optimized query: shared_playlists already gives us what we need
+    # No need for expensive subquery - COUNT(DISTINCT ps.playlist_id) gives us
+    # how many seed playlists each candidate appears in
+    cur.execute(f"""
+        SELECT 
+            ps.song_id,
+            COUNT(DISTINCT ps.playlist_id) AS shared_playlists
+        FROM playlist_songs ps
+        WHERE ps.playlist_id IN ({pl_placeholders})
+          AND ps.song_id NOT IN ({seed_placeholders})
+        GROUP BY ps.song_id
+        HAVING shared_playlists > 0
+        ORDER BY shared_playlists DESC
+        LIMIT ?
+    """, seed_playlists + seed_song_ids + [limit * 10])
+    
+    candidates = cur.fetchall()
+    if not candidates:
+        conn.close()
+        return []
 
     # --- Step 3: Compute cosine similarity ---
-    seed_vector_len = len(all_seed_playlists) ** 0.5
+    # For binary vectors in playlist space:
+    # cosine_sim = dot_product / (||seed|| * ||candidate||)
+    # 
+    # When we union seed songs into one vector:
+    # - dot_product = number of seed playlists the candidate appears in
+    # - ||seed|| = sqrt(num_seed_playlists) [number of playlists with ANY seed song]
+    # - ||candidate|| = sqrt(candidate's occurrences in seed playlists)
+    #
+    # This gives better scaling: songs that appear in many of the same playlists
+    # as our seeds get higher scores (closer to 1.0)
+    
+    seed_norm = num_seed_playlists ** 0.5
     results = []
-    for song_id, pls in song_playlists_map.items():
-        dot = len(pls & set(all_seed_playlists))
-        sim = dot / (seed_vector_len * (len(pls) ** 0.5) + 1e-9)
-        results.append((song_id, sim))
-
+    
+    for song_id, shared_count in candidates:
+        # shared_count is already the candidate's occurrences in seed playlists
+        candidate_norm = shared_count ** 0.5 if shared_count > 0 else 1.0
+        cosine_sim = shared_count / (seed_norm * candidate_norm + 1e-9)
+        results.append((song_id, cosine_sim))
+    
+    # Sort by similarity and take top results
     results.sort(key=lambda x: x[1], reverse=True)
     top_results = results[:limit]
 
-    # --- Step 4: Map IDs to "ARTIST : TITLE" ---
-    placeholders = ",".join("?" for _ in top_results)
-    cur.execute(f"SELECT id, artist, title FROM songs WHERE id IN ({placeholders})", [sid for sid, _ in top_results])
+    # --- Step 4: Fetch song names ---
+    if not top_results:
+        conn.close()
+        return []
+    
+    result_ids = [sid for sid, _ in top_results]
+    id_placeholders = ",".join("?" for _ in result_ids)
+    cur.execute(f"""
+        SELECT id, artist, title 
+        FROM songs 
+        WHERE id IN ({id_placeholders})
+    """, result_ids)
+    
     id_to_name = {row[0]: f"{row[1]} : {row[2]}" for row in cur.fetchall()}
-
     conn.close()
-    return [{"song": id_to_name[sid], "score": score} for sid, score in top_results]
+
+    return [{"song": id_to_name.get(sid, f"Unknown (ID: {sid})"), "score": score} 
+            for sid, score in top_results if sid in id_to_name]
 
 def hybrid_recommend(seed_song_ids: list[int], top_k: int = 10, alpha: float = 0.5):
-    """Hybrid recommendation: co-occurrence + playlist cosine (rescaled)."""
+    """Hybrid recommendation: co-occurrence + playlist cosine (rescaled).
+    
+    Args:
+        seed_song_ids: List of song IDs to base recommendations on
+        top_k: Number of recommendations to return
+        alpha: Weight for co-occurrence (0-1). 1 = pure co-occurrence, 0 = pure cosine
+    """
     if not seed_song_ids:
         return []
 
-    # Step 1: Co-occurrence
-    co_list = recommend_songs([{"id": sid} for sid in seed_song_ids], limit=top_k*5)
+    # Fetch more candidates for better blending
+    candidate_multiplier = 5
+    
+    # Step 1: Co-occurrence recommendations
+    co_list = recommend_songs([{"id": sid} for sid in seed_song_ids], limit=top_k * candidate_multiplier)
     co_scores = {item["song"]: item["score"] for item in co_list}
 
-    # Normalize co-occurrence scores
-    max_co = max(co_scores.values()) if co_scores else 1
-    co_norm = {song: score/max_co for song, score in co_scores.items()}
+    # Step 2: Cosine similarity recommendations
+    cosine_results = recommend_by_playlist_cosine(seed_song_ids, limit=top_k * candidate_multiplier)
+    cosine_scores = {row['song']: row['score'] for row in cosine_results}
 
-    # Step 2: Cosine similarity
-    cosine_results = recommend_by_playlist_cosine(seed_song_ids, limit=top_k*5)
-    max_cos = max(row['score'] for row in cosine_results) if cosine_results else 1
-    cosine_scores_rescaled = {row['song']: row['score']/max_cos for row in cosine_results}
+    # Step 3: Normalize scores to [0, 1] range
+    max_co = max(co_scores.values()) if co_scores else 1.0
+    max_cos = max(cosine_scores.values()) if cosine_scores else 1.0
+    
+    co_norm = {song: score / max_co for song, score in co_scores.items()}
+    cos_norm = {song: score / max_cos for song, score in cosine_scores.items()}
 
-    # Step 3: Combine
+    # Step 4: Combine scores with weighted average
     combined_scores = {}
-    for song_name, co_score in co_norm.items():
-        cos_score = cosine_scores_rescaled.get(song_name, 0)
+    all_songs = set(co_norm.keys()) | set(cos_norm.keys())
+    
+    for song_name in all_songs:
+        co_score = co_norm.get(song_name, 0.0)
+        cos_score = cos_norm.get(song_name, 0.0)
         combined_scores[song_name] = alpha * co_score + (1 - alpha) * cos_score
 
-    # Add cosine-only songs
-    for song_name, cos_score in cosine_scores_rescaled.items():
-        if song_name not in combined_scores:
-            combined_scores[song_name] = (1 - alpha) * cos_score
-
-    # Step 4: Sort top K
+    # Step 5: Sort and return top K
     top_combined = sorted(combined_scores.items(), key=lambda x: x[1], reverse=True)[:top_k]
     return [{"song": song_name, "score": score} for song_name, score in top_combined]
 
+
+# Auto-initialize database on module import
+# This runs once when the module is first imported, ensuring indexes and config
+# are set up for all code that uses this module
+configure_sqlite_once()
+ensure_indexes_once()
+
+
 if __name__ == "__main__":
-    configure_sqlite_once()
-    ensure_indexes_once()
+    # When run directly, also ensure database is loaded
     create_db_and_load_mpd(DB_PATH)
     print("Database setup complete.")
 
